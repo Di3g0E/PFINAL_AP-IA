@@ -30,7 +30,7 @@ export default function LandingPage() {
   }
 
   return (
-    <section className="space-y-8 animate-fadeIn">
+    <section className="mx-auto max-w-5xl px-4 py-6 space-y-8 animate-fadeIn">
       <header className="text-center space-y-4">
         <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-gradient-to-r from-blue-50 to-purple-50 border border-blue-200/50 text-sm">
           <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>

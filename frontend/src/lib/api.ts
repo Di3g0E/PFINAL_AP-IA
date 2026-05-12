@@ -75,11 +75,19 @@ function getToken(): string | null {
 export function setToken(token: string, userId: string) {
   localStorage.setItem("token", token);
   localStorage.setItem("user_id", userId);
+  // El NavBar y otros componentes escuchan este evento para refrescar el
+  // estado de autenticación sin tener que recargar la página.
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event("auth-change"));
+  }
 }
 
 export function clearToken() {
   localStorage.removeItem("token");
   localStorage.removeItem("user_id");
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event("auth-change"));
+  }
 }
 
 export function getUserId(): string | null {
