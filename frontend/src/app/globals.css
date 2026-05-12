@@ -1,0 +1,138 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light dark;
+  --gradient-start: #3b82f6;
+  --gradient-end: #8b5cf6;
+}
+
+html, body {
+  height: 100%;
+}
+
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+  color: #0f172a;
+}
+
+@media (prefers-color-scheme: dark) {
+  body { 
+    background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); 
+    color: #f1f5f9; 
+  }
+}
+
+/* Animaciones y transiciones */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(-20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.6s ease-out forwards;
+}
+
+.animate-slideIn {
+  animation: slideIn 0.5s ease-out forwards;
+}
+
+.animate-pulse-hover:hover {
+  animation: pulse 0.3s ease-in-out;
+}
+
+/* Mejoras de botones */
+.btn { 
+  @apply rounded-lg px-6 py-3 font-semibold transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed;
+  transform: translateY(0);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+}
+
+.btn-primary { 
+  @apply btn bg-gradient-to-r from-blue-600 to-purple-600 text-white hover:from-blue-700 hover:to-purple-700;
+  background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+}
+
+.btn-secondary { 
+  @apply btn bg-white/80 backdrop-blur-sm text-slate-700 border border-slate-200 hover:bg-white hover:border-slate-300;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.btn-danger { 
+  @apply btn bg-gradient-to-r from-red-600 to-pink-600 text-white hover:from-red-700 hover:to-pink-700;
+}
+
+/* Mejoras de inputs */
+.input { 
+  @apply w-full rounded-lg border border-slate-300/50 bg-white/80 backdrop-blur-sm px-4 py-3 text-sm transition-all duration-200 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.input:focus {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+/* Mejoras de tarjetas */
+.card { 
+  @apply rounded-xl border border-slate-200/50 bg-white/80 backdrop-blur-sm p-6 transition-all duration-300;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.07);
+}
+
+.card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.12);
+  border-color: rgba(59, 130, 246, 0.3);
+}
+
+/* Gradients y efectos especiales */
+.gradient-text {
+  background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.gradient-border {
+  position: relative;
+  background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+  padding: 1px;
+  border-radius: 0.75rem;
+}
+
+.gradient-border > * {
+  background: white;
+  border-radius: 0.6875rem;
+  position: relative;
+  z-index: 1;
+}
+
+/* Loading states */
+.loading {
+  @apply animate-pulse;
+  background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+  background-size: 200% 100%;
+  animation: loading 1.5s infinite;
+}
+
+@keyframes loading {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}

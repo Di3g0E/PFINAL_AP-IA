@@ -1,0 +1,51 @@
+# Archivos de entorno y configuración
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Entornos virtuales
+venv/
+env/
+.venv/
+
+# Modelos y binarios
+models/*.pkl
+models/*.h5
+models/*.onnx
+models/*.pt
+
+# Datos pesados y sensibles
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+data/external/*
+!data/external/.gitkeep
+
+# Logs
+logs/*.log
+
+# Datos biometricos cifrados (PII, no deben viajar al repo)
+data/face_embeddings.bin
+
+# Bases de datos locales (SQLite de dev)
+data/*.db
+data/*.db-journal
+data/*.sqlite
+data/*.sqlite3
+
+# IDE y sistema operativo
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Documentos
+doc/main.tex
+doc/
+!doc/main.pdf
+!doc/figures/**.png
+!doc/figures/**.tex
+!doc/factura3.jpg

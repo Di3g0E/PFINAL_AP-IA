@@ -1,0 +1,12 @@
+# Configuración mínima de pytest.
+# El proyecto en su conjunto se gestiona con `requirements.txt` + `uv`;
+# este fichero existe sólo para configurar herramientas que lo leen.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    # Modelos pre-entrenados de P2 y P3 fueron pickleados con sklearn 1.7/1.8,
+    # P6 fija sklearn 1.5.0 por compatibilidad con PaddleOCR. El pickle se
+    # carga correctamente; sólo silenciamos el aviso para mantener limpia la suite.
+    "ignore::sklearn.exceptions.InconsistentVersionWarning",
+]

@@ -1,0 +1,40 @@
+.venv/
+.git/
+.gitignore
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Datos: el runtime de producción usa Supabase, no necesitamos los CSV en imagen.
+# Si vuelves a usar docker-compose local, se montan como volumen.
+data/raw/*
+data/processed/*
+data/external/*
+data/*.db
+data/*.db-journal
+data/face_embeddings.bin
+
+# NOTA: a diferencia de P6, NO excluimos models/* — HF Spaces no tiene
+# volúmenes persistentes, así que los binarios entrenados deben viajar
+# en la imagen.
+
+# Logs y entornos
+logs/*.log
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+
+# Documentación y assets que no necesita el runtime
+doc/
+docs/
+references/
+playground/
+tests/
+.pytest_cache/
+frontend/
+*.pdf
+*.zip
