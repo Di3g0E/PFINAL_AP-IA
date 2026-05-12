@@ -7,8 +7,15 @@ import {
   addManualTransaction,
   chat,
   clearToken,
+  createChatSession,
+  deleteChatSession,
   extractFromImage,
+  getChatSession,
+  getCurrentSessionId,
   getUserId,
+  listChatSessions,
+  setCurrentSessionId,
+  type ChatSessionOut,
   type ManualTransactionInput,
   type OCRExtracted,
 } from "@/lib/api";
@@ -42,6 +49,10 @@ export default function ChatPage() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Sidebar de sesiones
+  const [sessions, setSessions] = useState<ChatSessionOut[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+
   // OCR
   const [ocrLoading, setOcrLoading] = useState(false);
   const [ocrExtracted, setOcrExtracted] = useState<OCRExtracted | null>(null);
@@ -56,15 +67,58 @@ export default function ChatPage() {
     };
   }, [ocrPreviewUrl]);
 
-  // Protege la ruta: sin token → /login
+  // Protege la ruta + recupera sesión activa al montar.
+  // Si hay `current_session_id` en localStorage, lo cargamos para que al
+  // cambiar de pestaña (Chat → Pendientes → Chat) o recargar la página
+  // se mantenga el chat abierto. La sesión solo se "abandona" cuando el
+  // usuario pulsa "Nueva conversación".
   useEffect(() => {
     const uid = getUserId();
     if (!uid) {
       router.replace("/login");
-    } else {
-      setUserId(uid);
+      return;
     }
+    setUserId(uid);
+
+    const stored = getCurrentSessionId();
+    if (stored) {
+      (async () => {
+        try {
+          const detail = await getChatSession(stored);
+          setSessionId(detail.session.id);
+          setTurns(
+            detail.messages
+              .filter((m) => m.role === "user" || m.role === "assistant")
+              .map((m) => ({
+                role: m.role as "user" | "assistant",
+                text: m.content,
+                action: m.action,
+              })),
+          );
+        } catch (err) {
+          // La sesión guardada no existe ya (borrada, cambio de usuario,
+          // BD reiniciada, etc.) → limpiamos y empezamos en blanco.
+          console.warn("No se pudo rehidratar la sesión guardada:", err);
+          setCurrentSessionId(null);
+        }
+      })();
+    }
+
+    // Carga inicial del histórico (sidebar).
+    refreshSessions();
   }, [router]);
+
+  const refreshSessions = async () => {
+    setSessionsLoading(true);
+    try {
+      const list = await listChatSessions();
+      setSessions(list);
+    } catch (err) {
+      console.warn("listChatSessions falló:", err);
+    } finally {
+      setSessionsLoading(false);
+    }
+  };
 
   // Auto-scroll al fondo cuando llega un nuevo turno
   useEffect(() => {
@@ -81,10 +135,14 @@ export default function ChatPage() {
     try {
       const r = await chat(text, sessionId);
       setSessionId(r.session_id);
+      setCurrentSessionId(r.session_id);
       setTurns((t) => [
         ...t,
         { role: "assistant", text: r.response, action: r.last_action },
       ]);
+      // Refresca el sidebar para que aparezca la sesión nueva o se
+      // actualice `last_message_at`.
+      refreshSessions();
     } catch (err) {
       const msg = (err as Error).message;
       setError(msg);
@@ -95,6 +153,49 @@ export default function ChatPage() {
       }
     } finally {
       setLoading(false);
+    }
+  };
+
+  const onNewChat = () => {
+    setSessionId(undefined);
+    setCurrentSessionId(null);
+    setTurns([]);
+    setError(null);
+  };
+
+  const onPickSession = async (id: string) => {
+    if (id === sessionId || loading) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const detail = await getChatSession(id);
+      setSessionId(detail.session.id);
+      setCurrentSessionId(detail.session.id);
+      setTurns(
+        detail.messages
+          .filter((m) => m.role === "user" || m.role === "assistant")
+          .map((m) => ({
+            role: m.role as "user" | "assistant",
+            text: m.content,
+            action: m.action,
+          })),
+      );
+    } catch (err) {
+      setError(`No se pudo cargar la sesión: ${(err as Error).message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const onDeleteSession = async (id: string) => {
+    if (!confirm("¿Borrar esta conversación? Esta acción no se puede deshacer.")) return;
+    try {
+      await deleteChatSession(id);
+      // Si era la sesión activa, resetea
+      if (id === sessionId) onNewChat();
+      refreshSessions();
+    } catch (err) {
+      setError(`No se pudo borrar la sesión: ${(err as Error).message}`);
     }
   };
 
@@ -201,7 +302,7 @@ export default function ChatPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50">
       {/* Main Content */}
-      <main className="max-w-4xl mx-auto px-4 py-6">
+      <main className="max-w-6xl mx-auto px-4 py-6">
         {/* Sub-cabecera con info del usuario/sesión. El NavBar global ya
             ofrece Configuración / Cerrar sesión. */}
         <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
@@ -233,7 +334,65 @@ export default function ChatPage() {
             )}
           </div>
         </div>
-        <Card variant="glass" className="h-[600px] flex flex-col">
+
+        <div className="grid grid-cols-1 md:grid-cols-[280px_1fr] gap-4">
+          {/* Sidebar de sesiones */}
+          <aside className="hidden md:flex flex-col h-[600px] bg-white/60 backdrop-blur-sm border border-slate-200/60 rounded-xl overflow-hidden">
+            <div className="p-3 border-b border-slate-200/60 flex items-center justify-between">
+              <span className="text-sm font-semibold text-slate-700">Historial</span>
+              <button
+                onClick={onNewChat}
+                className="text-xs px-2 py-1 rounded-md bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+                title="Empezar conversación nueva"
+              >
+                + Nueva
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-2 space-y-1">
+              {sessionsLoading && sessions.length === 0 ? (
+                <p className="text-xs text-slate-400 px-2 py-4 text-center">Cargando…</p>
+              ) : sessions.length === 0 ? (
+                <p className="text-xs text-slate-400 px-2 py-4 text-center">
+                  No hay conversaciones todavía
+                </p>
+              ) : (
+                sessions.map((s) => {
+                  const active = s.id === sessionId;
+                  return (
+                    <div
+                      key={s.id}
+                      className={`group flex items-start gap-1 px-2 py-2 rounded-md cursor-pointer transition-colors ${
+                        active
+                          ? "bg-blue-100 border border-blue-200"
+                          : "hover:bg-slate-100 border border-transparent"
+                      }`}
+                      onClick={() => onPickSession(s.id)}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p className={`text-xs truncate ${active ? "font-semibold text-blue-800" : "text-slate-700"}`}>
+                          {s.title}
+                        </p>
+                        <p className="text-[10px] text-slate-400 mt-0.5">
+                          {new Date(s.last_message_at).toLocaleString("es-ES", {
+                            day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
+                          })}
+                        </p>
+                      </div>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onDeleteSession(s.id); }}
+                        className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-red-600 text-xs p-1"
+                        title="Borrar conversación"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </aside>
+
+          <Card variant="glass" className="h-[600px] flex flex-col">
           <CardHeader className="pb-4">
             <CardTitle className="text-lg">Conversación</CardTitle>
           </CardHeader>
@@ -386,6 +545,7 @@ export default function ChatPage() {
             </div>
           </CardContent>
         </Card>
+        </div>
       </main>
 
       <OCRConfirmModal

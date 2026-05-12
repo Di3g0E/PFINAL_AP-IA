@@ -85,6 +85,11 @@ export function setToken(token: string, userId: string) {
 export function clearToken() {
   localStorage.removeItem("token");
   localStorage.removeItem("user_id");
+  // Limpia también la sesión de chat activa: evita que al loguearse otro
+  // usuario distinto en el mismo navegador se intente rehidratar una
+  // sesión que no le pertenece (devolvería 404 y se limpiaría sola,
+  // pero es más limpio borrarla aquí).
+  localStorage.removeItem("current_session_id");
   if (typeof window !== "undefined") {
     window.dispatchEvent(new Event("auth-change"));
   }
@@ -202,6 +207,86 @@ export async function chat(
   });
   if (!res.ok) throw new Error(await parseError(res));
   return res.json();
+}
+
+// Sesiones persistentes (Fase 1)
+
+export type ChatSessionOut = {
+  id: string;
+  title: string;
+  summary: string | null;
+  archived: boolean;
+  created_at: string;
+  last_message_at: string;
+};
+
+export type ChatMessageOut = {
+  role: "user" | "assistant" | "system";
+  content: string;
+  action: string | null;
+  sequence: number;
+  created_at: string;
+};
+
+export type ChatSessionDetail = {
+  session: ChatSessionOut;
+  messages: ChatMessageOut[];
+};
+
+export async function listChatSessions(includeArchived = false): Promise<ChatSessionOut[]> {
+  const qs = includeArchived ? "?include_archived=true" : "";
+  const res = await authedFetch(`/chat/sessions${qs}`);
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+export async function createChatSession(title?: string): Promise<ChatSessionOut> {
+  const res = await authedFetch("/chat/sessions", {
+    method: "POST",
+    body: JSON.stringify({ title: title ?? null }),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+export async function getChatSession(sessionId: string): Promise<ChatSessionDetail> {
+  const res = await authedFetch(`/chat/sessions/${sessionId}`);
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+export async function renameChatSession(sessionId: string, title: string): Promise<ChatSessionOut> {
+  const res = await authedFetch(`/chat/sessions/${sessionId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ title }),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+export async function deleteChatSession(sessionId: string): Promise<void> {
+  const res = await authedFetch(`/chat/sessions/${sessionId}`, {
+    method: "DELETE",
+  });
+  if (!res.ok && res.status !== 204) throw new Error(await parseError(res));
+}
+
+// Helpers de session_id en localStorage (clave: 'current_session_id').
+// Sirven para que al cambiar de pestaña Chat ↔ Pendientes se recupere
+// automáticamente la conversación abierta.
+
+export function getCurrentSessionId(): string | null {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem("current_session_id");
+}
+
+export function setCurrentSessionId(sessionId: string | null) {
+  if (typeof window === "undefined") return;
+  if (sessionId === null) {
+    localStorage.removeItem("current_session_id");
+  } else {
+    localStorage.setItem("current_session_id", sessionId);
+  }
 }
 
 // Transacciones

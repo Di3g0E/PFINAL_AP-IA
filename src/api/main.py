@@ -34,9 +34,23 @@ from src.utils.logging_config import configure_logging
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    """Configura logging al arrancar y limpia recursos al cerrar."""
+    """Configura logging al arrancar y limpia recursos al cerrar.
+
+    Llama a `init_db()` (idempotente) para que las tablas nuevas declaradas
+    en `schema.py` se creen automáticamente en el siguiente deploy. SQLAlchemy
+    `create_all` no toca tablas existentes, así que es seguro reejecutarlo.
+    """
     configure_logging()
     logger.info("FastAPI lifespan: arrancando")
+    try:
+        from src.data.database import init_db, is_database_configured
+        if is_database_configured():
+            init_db()
+            logger.info("Esquema de BD verificado / creado")
+        else:
+            logger.warning("DATABASE_URL no configurada; saltando init_db")
+    except Exception as e:
+        logger.exception(f"init_db falló al arrancar: {e}")
     yield
     logger.info("FastAPI lifespan: cerrando")
 

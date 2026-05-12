@@ -57,6 +57,9 @@ class User(Base):
                                                              cascade="all, delete-orphan")
     goals: Mapped[list["Goal"]] = relationship(back_populates="user",
                                                cascade="all, delete-orphan")
+    chat_sessions: Mapped[list["ChatSession"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan",
+    )
 
 
 class UserSettings(Base):
@@ -174,6 +177,74 @@ class Event(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False)        # 'ok'|'error'|'denied'
     latency_ms: Mapped[Optional[int]] = mapped_column(Integer)
     payload: Mapped[Optional[dict]] = mapped_column(JSON)                  # metadatos sin PII
+
+
+class ChatSession(Base):
+    """Sesión de chat persistente de un usuario.
+
+    Estrategia de memoria (Fase 1 de la persistencia conversacional):
+      - Se almacenan los últimos K mensajes en `chat_messages` para rehidratar
+        el chat al cambiar de pestaña / recargar la página.
+      - Cada N turnos se regenera `summary` (resumen LLM) y se eliminan los
+        mensajes más antiguos que el horizonte K — la información condensada
+        sobrevive en `summary`.
+      - El LangGraph thread_id se mantiene como `user_id:session.id`.
+    """
+    __tablename__ = "chat_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    title: Mapped[str] = mapped_column(String(120), nullable=False,
+                                       default="Nueva conversación")
+    summary: Mapped[Optional[str]] = mapped_column(Text)
+    archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(),
+    )
+    last_message_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(),
+    )
+
+    user: Mapped["User"] = relationship(back_populates="chat_sessions")
+    messages: Mapped[list["ChatMessage"]] = relationship(
+        back_populates="session", cascade="all, delete-orphan",
+        order_by="ChatMessage.sequence",
+    )
+
+
+class ChatMessage(Base):
+    """Mensaje individual dentro de una `ChatSession`.
+
+    `sequence` es la posición lógica del mensaje dentro de la sesión (1, 2, 3...).
+    Sirve para ordenar de forma estable cuando dos mensajes comparten timestamp
+    (p. ej. lote de inserciones en el mismo turno) y para identificar qué
+    mensajes son anteriores al horizonte de retención.
+    """
+    __tablename__ = "chat_messages"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("chat_sessions.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    role: Mapped[str] = mapped_column(String(16), nullable=False)  # 'user'|'assistant'|'system'
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    # Última `OrchestratorDecision.action` que produjo este mensaje (`delegate_*`,
+    # `respond_final`, ...). Solo aplica al rol assistant.
+    action: Mapped[Optional[str]] = mapped_column(String(64))
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(),
+    )
+
+    session: Mapped["ChatSession"] = relationship(back_populates="messages")
+
+    __table_args__ = (
+        CheckConstraint("role IN ('user', 'assistant', 'system')",
+                        name="ck_chat_message_role"),
+    )
 
 
 class BiometricEmbedding(Base):
