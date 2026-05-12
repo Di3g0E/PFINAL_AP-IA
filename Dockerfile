@@ -51,7 +51,6 @@ RUN uv venv .venv --python 3.12 && \
 # --- Código de la aplicación ---
 COPY --chown=user:user src ./src
 COPY --chown=user:user main.py ./
-COPY --chown=user:user config ./config
 COPY --chown=user:user scripts ./scripts
 
 # Modelos pre-entrenados (P1/P2/P3 + liveness DenseNet). Van en la imagen
