@@ -223,28 +223,56 @@ async def telegram_status(
         result["error"] = "TELEGRAM_BOT_TOKEN no configurado en el servidor"
         return result
 
-    try:
-        url = f"https://api.telegram.org/bot{app_settings.telegram_bot_token}/getMe"
-        r = requests.get(url, timeout=8)
+    # getMe vía Telegram API. Usa los mismos parámetros que `send_message`
+    # (timeout largo + 2 reintentos ante errores transitorios) porque HF
+    # Spaces tiene latencia muy variable hacia api.telegram.org.
+    url = f"https://api.telegram.org/bot{app_settings.telegram_bot_token}/getMe"
+    last_error: Optional[str] = None
+    body: Optional[dict] = None
+
+    for attempt in range(1, 4):
+        try:
+            r = requests.get(url, timeout=(10, 25))
+        except (requests.Timeout, requests.ConnectionError) as e:
+            last_error = f"{type(e).__name__}: {e}"
+            logger.warning(f"getMe intento {attempt}/3 falló: {last_error}")
+            if attempt < 3:
+                import time as _time
+                _time.sleep(2 ** (attempt - 1))
+            continue
+        except Exception as e:
+            last_error = f"{type(e).__name__}: {e}"
+            break
+
         if r.status_code == 200:
-            body = r.json()
-            result["bot_reachable"] = bool(body.get("ok"))
+            try:
+                body = r.json()
+            except Exception as e:
+                last_error = f"JSON decode error: {e}"
+                break
             if body.get("ok"):
                 bot = body.get("result", {})
+                result["bot_reachable"] = True
                 result["bot_info"] = {
                     "id": bot.get("id"),
                     "username": bot.get("username"),
                     "first_name": bot.get("first_name"),
                 }
-            else:
-                result["error"] = f"getMe respondió ok=false: {body}"
-        else:
-            try:
-                desc = r.json().get("description") or r.text
-            except Exception:
-                desc = r.text
-            result["error"] = f"getMe HTTP {r.status_code}: {desc}"
-    except Exception as e:
-        result["error"] = f"{type(e).__name__}: {e}"
+                return result
+            last_error = f"getMe respondió ok=false: {body}"
+            break
 
+        try:
+            desc = r.json().get("description") or r.text
+        except Exception:
+            desc = r.text
+        last_error = f"getMe HTTP {r.status_code}: {desc}"
+        # 5xx merece reintento; 4xx es permanente.
+        if r.status_code < 500:
+            break
+        if attempt < 3:
+            import time as _time
+            _time.sleep(2 ** (attempt - 1))
+
+    result["error"] = last_error
     return result
