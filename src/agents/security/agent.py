@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Optional
 
 import bcrypt
@@ -75,12 +74,13 @@ def _format_db_error(e: Exception) -> str:
 
 
 def _get_embedding_store() -> EncryptedEmbeddingStore:
-    """Almacén cifrado de embeddings biométricos. Singleton lazy."""
+    """Almacén cifrado de embeddings biométricos. Singleton lazy.
+
+    Backend Postgres (tabla `biometric_embeddings`) — sin estado en disco.
+    """
     global _EMBEDDING_STORE
     if _EMBEDDING_STORE is None:
-        path = Path(settings.data_dir) / "face_embeddings.bin"
         _EMBEDDING_STORE = EncryptedEmbeddingStore(
-            db_path=path,
             passphrase=settings.embedding_store_passphrase,
         )
     return _EMBEDDING_STORE
@@ -282,11 +282,9 @@ def register_user(request: RegisterRequest) -> SecurityVerdict:
         return SecurityVerdict(decision="deny",
                                reason=f"Error al crear el usuario: {msg}")
 
-    # 5. Almacén cifrado de embedding
+    # 5. Almacén cifrado de embedding (persistente en Postgres)
     try:
-        store = _get_embedding_store()
-        store.store(user_id, features.embedding)
-        store.save()
+        _get_embedding_store().store(user_id, features.embedding)
     except Exception as e:
         logger.exception(f"register_user: store de embedding falló: {e}")
         return SecurityVerdict(

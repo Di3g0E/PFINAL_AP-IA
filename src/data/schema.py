@@ -30,7 +30,7 @@ from typing import Optional
 
 from sqlalchemy import (
     JSON, BigInteger, Boolean, CheckConstraint, Date, DateTime, ForeignKey,
-    Integer, Numeric, String, Text, Uuid, func,
+    Integer, LargeBinary, Numeric, String, Text, Uuid, func,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -174,3 +174,35 @@ class Event(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False)        # 'ok'|'error'|'denied'
     latency_ms: Mapped[Optional[int]] = mapped_column(Integer)
     payload: Mapped[Optional[dict]] = mapped_column(JSON)                  # metadatos sin PII
+
+
+class BiometricEmbedding(Base):
+    """
+    Almacén cifrado de embeddings faciales (FaceNet/VGGFace2, 512-dim float32).
+
+    Reemplaza el fichero local `data/face_embeddings.bin` de P5/P6 — necesario
+    para HF Spaces, que no tiene almacenamiento persistente en el plan free.
+
+    Esquema de cifrado por fila:
+      - salt: 16 bytes aleatorios; alimenta PBKDF2-HMAC-SHA256 (310k iter, NIST 2024).
+      - ciphertext: Fernet (AES-128-CBC + HMAC-SHA256) del embedding en plano.
+      - integrity_hash: SHA-256 del embedding en plano para detectar tampering
+        sin tener que descifrar.
+
+    La passphrase del servidor (`EMBEDDING_STORE_PASSPHRASE` del .env / secret de
+    HF) NUNCA viaja a la BD; sin ella el `ciphertext` es inservible.
+    """
+    __tablename__ = "biometric_embeddings"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True,
+    )
+    salt: Mapped[bytes] = mapped_column(LargeBinary(16), nullable=False)
+    ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    integrity_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(),
+    )

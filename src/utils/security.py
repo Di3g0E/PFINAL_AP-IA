@@ -20,12 +20,12 @@ from __future__ import annotations
 import base64
 import hashlib
 import os
-import pickle
 import time
+import uuid as _uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Optional
 
 import numpy as np
 from cryptography.fernet import Fernet, InvalidToken
@@ -60,99 +60,147 @@ def derive_key(passphrase: str, salt: Optional[bytes] = None) -> tuple[bytes, by
 @dataclass
 class EncryptedEmbeddingStore:
     """
-    Almacén cifrado de embeddings en disco.
+    Almacén cifrado de embeddings en Postgres (tabla `biometric_embeddings`).
 
-    Formato del fichero:
-        {
-          "salt":    bytes,
-          "records": { user_id: {"ciphertext": bytes, "hash": str} }
-        }
+    Reemplaza el backend de fichero local de P5/P6: en HF Spaces free no hay
+    almacenamiento persistente, así que cualquier reinicio del Space borraba
+    los embeddings. Ahora cada fila vive en Supabase con su propio salt y
+    queda asociada al usuario por `user_id` (FK con cascade).
 
-    El 'hash' es SHA-256 del embedding en plano; permite detectar manipulación
-    sin descifrar todos los registros (verificación rápida de integridad).
+    Esquema de cifrado por usuario:
+      - salt:           16 bytes aleatorios (PBKDF2-HMAC-SHA256, 310k iter).
+      - ciphertext:     Fernet (AES-128-CBC + HMAC-SHA256) del embedding plano.
+      - integrity_hash: SHA-256 del embedding plano; detecta tampering sin
+                        descifrar todas las filas.
+
+    El salt es por fila (no compartido) para que el compromiso de una clave
+    derivada no facilite el ataque sobre las demás. El coste extra de derivar
+    la Fernet en cada operación (~300 ms) es aceptable: las operaciones de
+    biometría ocurren solo en login/register, no en hot paths.
+
+    `db_path` se mantiene en la firma por compatibilidad con tests antiguos
+    (que pasaban un Path al constructor); se ignora por completo.
     """
 
-    db_path: Path
     passphrase: str
-    _fernet: Optional[Fernet] = field(default=None, repr=False, init=False)
-    _records: Dict[str, dict] = field(default_factory=dict, repr=False, init=False)
-    _salt: Optional[bytes] = field(default=None, repr=False, init=False)
+    db_path: Optional[Path] = field(default=None)   # ignorado, solo compat
 
-    def __post_init__(self):
-        self.db_path = Path(self.db_path)
-        if self.db_path.exists():
-            self._load()
-        else:
-            self._salt = os.urandom(16)
-            key, _ = derive_key(self.passphrase, self._salt)
-            self._fernet = Fernet(key)
-            logger.info(f"Nueva base de datos de embeddings creada en {self.db_path}")
+    def _derive_fernet(self, salt: bytes) -> Fernet:
+        key, _ = derive_key(self.passphrase, salt)
+        return Fernet(key)
 
-    def _load(self) -> None:
-        with open(self.db_path, "rb") as f:
-            data = pickle.load(f)
-        self._salt = data["salt"]
-        key, _ = derive_key(self.passphrase, self._salt)
-        self._fernet = Fernet(key)
-        self._records = data["records"]
-        logger.info(
-            f"Base de datos de embeddings cargada: {len(self._records)} registros."
-        )
-
-    def save(self) -> None:
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.db_path, "wb") as f:
-            pickle.dump({"salt": self._salt, "records": self._records}, f)
-        logger.debug(f"Base de datos guardada en {self.db_path}")
+    def _coerce_uuid(self, user_id: str) -> Optional[_uuid.UUID]:
+        try:
+            return _uuid.UUID(user_id)
+        except (ValueError, AttributeError, TypeError):
+            logger.warning(f"user_id no convertible a UUID: {user_id!r}")
+            return None
 
     def store(self, user_id: str, embedding: np.ndarray) -> None:
-        """Cifra y almacena el embedding de un usuario."""
+        """Cifra y persiste el embedding del usuario en Postgres."""
+        # Imports locales para evitar ciclo schema → security al cargar.
+        from src.data.database import get_session
+        from src.data.schema import BiometricEmbedding
+
+        user_uuid = self._coerce_uuid(user_id)
+        if user_uuid is None:
+            raise ValueError(f"user_id inválido: {user_id!r}")
+
         raw = embedding.astype(np.float32).tobytes()
-        ciphertext = self._fernet.encrypt(raw)
+        salt = os.urandom(16)
+        fernet = self._derive_fernet(salt)
+        ciphertext = fernet.encrypt(raw)
         integrity_hash = hashlib.sha256(raw).hexdigest()
-        self._records[user_id] = {
-            "ciphertext": ciphertext,
-            "hash": integrity_hash,
-        }
+
+        with get_session() as session:
+            existing = session.get(BiometricEmbedding, user_uuid)
+            if existing is None:
+                session.add(BiometricEmbedding(
+                    user_id=user_uuid,
+                    salt=salt,
+                    ciphertext=ciphertext,
+                    integrity_hash=integrity_hash,
+                ))
+            else:
+                existing.salt = salt
+                existing.ciphertext = ciphertext
+                existing.integrity_hash = integrity_hash
         logger.debug(f"Embedding almacenado para usuario '{user_id}'.")
 
     def retrieve(self, user_id: str) -> Optional[np.ndarray]:
         """Descifra y devuelve el embedding, verificando la integridad."""
-        record = self._records.get(user_id)
-        if record is None:
+        from src.data.database import get_session
+        from src.data.schema import BiometricEmbedding
+
+        user_uuid = self._coerce_uuid(user_id)
+        if user_uuid is None:
             return None
+
+        with get_session() as session:
+            row = session.get(BiometricEmbedding, user_uuid)
+            if row is None:
+                return None
+            salt = bytes(row.salt)
+            ciphertext = bytes(row.ciphertext)
+            integrity_hash = row.integrity_hash
+
+        fernet = self._derive_fernet(salt)
         try:
-            raw = self._fernet.decrypt(record["ciphertext"])
+            raw = fernet.decrypt(ciphertext)
         except InvalidToken:
             logger.error(
                 f"Error de descifrado para '{user_id}'. "
-                "¿Clave incorrecta o datos corruptos?"
+                "¿Passphrase del servidor cambiada o datos corruptos?"
             )
             return None
 
-        # Verificación de integridad
-        if hashlib.sha256(raw).hexdigest() != record["hash"]:
+        if hashlib.sha256(raw).hexdigest() != integrity_hash:
             logger.critical(
                 f"¡Integridad comprometida para usuario '{user_id}'! "
                 "El hash no coincide. Posible manipulación de la base de datos."
             )
             return None
 
-        embedding = np.frombuffer(raw, dtype=np.float32).copy()
-        return embedding
+        return np.frombuffer(raw, dtype=np.float32).copy()
 
     def delete(self, user_id: str) -> bool:
-        if user_id in self._records:
-            del self._records[user_id]
-            logger.info(f"Embedding eliminado para usuario '{user_id}'.")
-            return True
-        return False
+        from src.data.database import get_session
+        from src.data.schema import BiometricEmbedding
+
+        user_uuid = self._coerce_uuid(user_id)
+        if user_uuid is None:
+            return False
+
+        with get_session() as session:
+            row = session.get(BiometricEmbedding, user_uuid)
+            if row is None:
+                return False
+            session.delete(row)
+        logger.info(f"Embedding eliminado para usuario '{user_id}'.")
+        return True
 
     def list_users(self) -> list[str]:
-        return list(self._records.keys())
+        from sqlalchemy import select
+        from src.data.database import get_session
+        from src.data.schema import BiometricEmbedding
+
+        with get_session() as session:
+            uuids = session.execute(select(BiometricEmbedding.user_id)).scalars().all()
+            return [str(u) for u in uuids]
 
     def __contains__(self, user_id: str) -> bool:
-        return user_id in self._records
+        from src.data.database import get_session
+        from src.data.schema import BiometricEmbedding
+
+        user_uuid = self._coerce_uuid(user_id)
+        if user_uuid is None:
+            return False
+        with get_session() as session:
+            return session.get(BiometricEmbedding, user_uuid) is not None
+
+    def save(self) -> None:
+        """No-op: la persistencia es transaccional en cada `store`/`delete`."""
+        return None
 
 
 # Control de acceso por intentos fallidos
