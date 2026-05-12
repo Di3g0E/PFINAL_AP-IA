@@ -26,12 +26,17 @@ from loguru import logger
 
 from src.utils.config import settings
 
+# pywhatkit arrastra pyautogui → mouseinfo, que al importarse trata de abrir
+# un display X. En entornos headless (HF Spaces, Docker sin GUI) eso lanza
+# KeyError('DISPLAY') o similar al importar, no ImportError. Capturamos
+# Exception para que el módulo siga cargando con WhatsApp deshabilitado.
 try:
     import pywhatkit
     PYWHATKIT_AVAILABLE = True
-except ImportError:
+except Exception as e:
+    pywhatkit = None
     PYWHATKIT_AVAILABLE = False
-    logger.warning("pywhatkit no instalado — WhatsApp deshabilitado")
+    logger.warning(f"pywhatkit deshabilitado ({type(e).__name__}: {e}) — WhatsApp no disponible")
 
 
 NotificationLevel = Literal["redacted", "full"]
