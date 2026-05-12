@@ -271,9 +271,14 @@ def notify(config: UserNotificationConfig, action: str, success: bool = True, **
 
 
 # Helpers de alto nivel (uno por trigger del sistema)
+#
+# Devuelven el dict de `notify()` para que el caller pueda loguear o propagar el
+# resultado. Hasta P6 estos helpers devolvían None; lo cambiamos al diagnosticar
+# que los fallos de Telegram se perdían silenciosamente (p. ej. notificación de
+# login que nunca llegaba a pesar de que el "Probar" sí).
 
-def notify_register(config: UserNotificationConfig) -> None:
-    notify(config, "register", success=True)
+def notify_register(config: UserNotificationConfig) -> dict:
+    return notify(config, "register", success=True)
 
 
 def notify_login(
@@ -283,9 +288,9 @@ def notify_login(
     similarity: Optional[float] = None,
     liveness: Optional[float] = None,
     message: Optional[str] = None,
-) -> None:
-    notify(config, "login", success=success,
-           similarity=similarity, liveness=liveness, message=message)
+) -> dict:
+    return notify(config, "login", success=success,
+                  similarity=similarity, liveness=liveness, message=message)
 
 
 def notify_finance_anomaly(
@@ -297,10 +302,10 @@ def notify_finance_anomaly(
     area: str,
     type_val: str,
     description: Optional[str] = None,
-) -> None:
-    notify(config, "finance_anomaly", success=False,
-           reasons=reasons, date=date, amount=amount,
-           area=area, type=type_val, description=description)
+) -> dict:
+    return notify(config, "finance_anomaly", success=False,
+                  reasons=reasons, date=date, amount=amount,
+                  area=area, type=type_val, description=description)
 
 
 def notify_goal_threshold(
@@ -310,7 +315,7 @@ def notify_goal_threshold(
     current,
     limit,
     pct: float,
-) -> None:
+) -> dict:
     severity = "critical" if pct >= 1.0 else "warning"
-    notify(config, "goal_threshold",
-           area=area, current=current, limit=limit, pct=pct, severity=severity)
+    return notify(config, "goal_threshold",
+                  area=area, current=current, limit=limit, pct=pct, severity=severity)

@@ -87,19 +87,27 @@ def _get_embedding_store() -> EncryptedEmbeddingStore:
 
 
 def _get_notif_config(user_id: str) -> Optional[UserNotificationConfig]:
-    """Carga la config de notificaciones del usuario desde BD. None si no hay."""
+    """Carga la config de notificaciones del usuario desde BD. None si no hay.
+
+    Loguea explícitamente cada razón por la que devuelve None para poder
+    diagnosticar en producción por qué una notificación no se dispara
+    (BD no configurada, user_id no es UUID, row inexistente, etc.).
+    """
     try:
         from src.data.database import get_session, is_database_configured
         from src.data.schema import UserSettings
-    except Exception:
+    except Exception as e:
+        logger.warning(f"_get_notif_config: import falló: {e}")
         return None
 
     if not is_database_configured():
+        logger.warning(f"_get_notif_config: BD no configurada (user_id={user_id})")
         return None
 
     try:
         user_uuid = uuid.UUID(user_id)
     except ValueError:
+        logger.warning(f"_get_notif_config: user_id no es UUID válido: {user_id}")
         return None
 
     try:
@@ -108,14 +116,20 @@ def _get_notif_config(user_id: str) -> Optional[UserNotificationConfig]:
                 select(UserSettings).where(UserSettings.user_id == user_uuid)
             ).scalar_one_or_none()
             if row is None:
+                logger.info(f"_get_notif_config: sin UserSettings para {user_id}")
                 return None
-            return UserNotificationConfig(
+            cfg = UserNotificationConfig(
                 user_id=user_id,
                 notifications_enabled=row.notifications_enabled,
                 telegram_chat_id=row.telegram_chat_id,
                 whatsapp_phone=row.whatsapp_phone,
                 notification_level=row.notification_level,  # type: ignore[arg-type]
             )
+            logger.debug(
+                f"_get_notif_config OK: enabled={cfg.notifications_enabled} "
+                f"telegram={'set' if cfg.telegram_chat_id else 'none'}"
+            )
+            return cfg
     except Exception as e:
         logger.warning(f"Lookup de notification config falló: {e}")
         return None
@@ -446,11 +460,27 @@ def login_user(request: LoginRequest) -> SecurityVerdict:
 def _maybe_notify_login(user_id: str, *, success: bool, reason: str = "",
                         similarity: Optional[float] = None,
                         liveness: Optional[float] = None) -> None:
+    """Dispara la notificación de login. Loguea el resultado por canal.
+
+    El resultado de `notify_login` (dict por canal) se loguea siempre para que
+    podamos diagnosticar en producción por qué un mensaje no llega.
+    """
+    logger.info(f"_maybe_notify_login: user_id={user_id} success={success}")
     cfg = _get_notif_config(user_id)
     if cfg is None:
+        logger.info(f"_maybe_notify_login: cfg=None, no se notifica a {user_id}")
+        return
+    if not cfg.notifications_enabled:
+        logger.info(f"_maybe_notify_login: notifications_enabled=False para {user_id}")
+        return
+    if not cfg.telegram_chat_id:
+        logger.info(f"_maybe_notify_login: sin telegram_chat_id para {user_id}")
         return
     try:
-        notify_login(cfg, success=success, similarity=similarity, liveness=liveness,
-                     message=("Acceso concedido" if success else f"Fallo: {reason}"))
+        result = notify_login(
+            cfg, success=success, similarity=similarity, liveness=liveness,
+            message=("Acceso concedido" if success else f"Fallo: {reason}"),
+        )
+        logger.info(f"_maybe_notify_login result: {result}")
     except Exception as e:
         logger.warning(f"notify_login falló: {e}")
