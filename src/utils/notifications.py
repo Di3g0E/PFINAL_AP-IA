@@ -57,6 +57,12 @@ class UserNotificationConfig:
 class TelegramService:
     """Bot de Telegram vía HTTP API (Markdown soportado, invisible para el usuario)."""
 
+    # HF Spaces tiene latencia variable hacia api.telegram.org; un timeout
+    # generoso evita falsos negativos. Tuple (connect, read).
+    _TIMEOUT: tuple[float, float] = (10.0, 25.0)
+    # Reintentos ante errores transitorios (ReadTimeout, ConnectionError, 5xx).
+    _MAX_ATTEMPTS: int = 3
+
     def __init__(self, token: str, chat_id: str):
         self.token = token
         self.chat_id = chat_id
@@ -65,18 +71,58 @@ class TelegramService:
     def send_message(self, message: str) -> tuple[bool, Optional[str]]:
         """Envía un mensaje. Devuelve (ok, error_detail).
 
-        Cuando Telegram responde con 4xx/5xx, extrae el campo `description` del
-        JSON oficial (p. ej. "chat not found", "Forbidden: bot was blocked by
-        the user") para que el caller pueda mostrárselo al usuario.
+        Estrategia de reintentos: hasta `_MAX_ATTEMPTS` intentos con backoff
+        exponencial (1s, 2s, 4s) solo para fallos transitorios — ReadTimeout,
+        ConnectionError y 5xx del servidor de Telegram. Para errores 4xx
+        (chat not found, bot blocked, etc.) no reintenta porque son
+        permanentes y la culpa la tiene la configuración del usuario.
+
+        Cuando Telegram responde con 4xx/5xx, extrae el campo `description`
+        del JSON oficial para que el caller pueda mostrárselo al usuario.
         """
-        try:
-            payload = {
-                "chat_id": self.chat_id,
-                "text": message,
-                "parse_mode": "Markdown",
-            }
-            response = requests.post(self.base_url, json=payload, timeout=10)
+        payload = {
+            "chat_id": self.chat_id,
+            "text": message,
+            "parse_mode": "Markdown",
+        }
+        last_detail: Optional[str] = None
+
+        for attempt in range(1, self._MAX_ATTEMPTS + 1):
+            try:
+                response = requests.post(self.base_url, json=payload, timeout=self._TIMEOUT)
+            except (requests.Timeout, requests.ConnectionError) as e:
+                last_detail = f"{type(e).__name__}: {e}"
+                logger.warning(
+                    f"Telegram intento {attempt}/{self._MAX_ATTEMPTS} falló por red: {last_detail}"
+                )
+                if attempt < self._MAX_ATTEMPTS:
+                    time.sleep(2 ** (attempt - 1))
+                continue
+            except requests.RequestException as e:
+                detail = f"{type(e).__name__}: {e}"
+                logger.error(f"Telegram request error: {detail}")
+                return False, detail
+            except Exception as e:
+                detail = f"{type(e).__name__}: {e}"
+                logger.error(f"Telegram unexpected error: {detail}")
+                return False, detail
+
+            if response.status_code >= 500:
+                # 5xx: el servidor de Telegram está mal, merece reintento.
+                try:
+                    err_desc = response.json().get("description") or response.text
+                except Exception:
+                    err_desc = response.text
+                last_detail = f"Telegram API {response.status_code}: {err_desc}"
+                logger.warning(
+                    f"Telegram intento {attempt}/{self._MAX_ATTEMPTS} → {last_detail}"
+                )
+                if attempt < self._MAX_ATTEMPTS:
+                    time.sleep(2 ** (attempt - 1))
+                continue
+
             if response.status_code >= 400:
+                # 4xx: error permanente; no reintenta.
                 try:
                     err_desc = response.json().get("description") or response.text
                 except Exception:
@@ -84,16 +130,12 @@ class TelegramService:
                 detail = f"Telegram API {response.status_code}: {err_desc}"
                 logger.error(detail)
                 return False, detail
-            logger.info(f"Telegram → chat {self.chat_id} OK")
+
+            logger.info(f"Telegram → chat {self.chat_id} OK (intento {attempt})")
             return True, None
-        except requests.RequestException as e:
-            detail = f"{type(e).__name__}: {e}"
-            logger.error(f"Telegram request error: {detail}")
-            return False, detail
-        except Exception as e:
-            detail = f"{type(e).__name__}: {e}"
-            logger.error(f"Telegram unexpected error: {detail}")
-            return False, detail
+
+        # Agotamos los reintentos sin éxito.
+        return False, last_detail or "Telegram inalcanzable tras varios reintentos"
 
 
 class WhatsAppService:
