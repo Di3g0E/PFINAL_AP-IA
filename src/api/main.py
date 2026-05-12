@@ -66,9 +66,6 @@ app.include_router(chat.router)
 app.include_router(transactions.router)
 app.include_router(settings_router.router)
 
-# Endpoint público para webhook de Telegram (no requiere autenticación)
-app.include_router(settings_router.router, prefix="/telegram", tags=["telegram"])
-
 
 @app.get("/", tags=["health"], summary="Healthcheck")
 def root() -> dict:

@@ -62,7 +62,13 @@ class TelegramService:
         self.chat_id = chat_id
         self.base_url = f"https://api.telegram.org/bot{token}/sendMessage"
 
-    def send_message(self, message: str) -> bool:
+    def send_message(self, message: str) -> tuple[bool, Optional[str]]:
+        """Envía un mensaje. Devuelve (ok, error_detail).
+
+        Cuando Telegram responde con 4xx/5xx, extrae el campo `description` del
+        JSON oficial (p. ej. "chat not found", "Forbidden: bot was blocked by
+        the user") para que el caller pueda mostrárselo al usuario.
+        """
         try:
             payload = {
                 "chat_id": self.chat_id,
@@ -70,12 +76,24 @@ class TelegramService:
                 "parse_mode": "Markdown",
             }
             response = requests.post(self.base_url, json=payload, timeout=10)
-            response.raise_for_status()
+            if response.status_code >= 400:
+                try:
+                    err_desc = response.json().get("description") or response.text
+                except Exception:
+                    err_desc = response.text
+                detail = f"Telegram API {response.status_code}: {err_desc}"
+                logger.error(detail)
+                return False, detail
             logger.info(f"Telegram → chat {self.chat_id} OK")
-            return True
+            return True, None
+        except requests.RequestException as e:
+            detail = f"{type(e).__name__}: {e}"
+            logger.error(f"Telegram request error: {detail}")
+            return False, detail
         except Exception as e:
-            logger.error(f"Telegram error: {e}")
-            return False
+            detail = f"{type(e).__name__}: {e}"
+            logger.error(f"Telegram unexpected error: {detail}")
+            return False, detail
 
 
 class WhatsAppService:
@@ -194,7 +212,7 @@ def get_notification_message(
 
 # Despachador
 
-def notify(config: UserNotificationConfig, action: str, success: bool = True, **kwargs) -> None:
+def notify(config: UserNotificationConfig, action: str, success: bool = True, **kwargs) -> dict:
     """
     Envía la notificación al usuario por todos los canales que tenga configurados.
 
@@ -203,10 +221,21 @@ def notify(config: UserNotificationConfig, action: str, success: bool = True, **
         action: tipo de evento ('register', 'login', 'finance_anomaly', 'goal_threshold').
         success: solo relevante para 'login'.
         **kwargs: payload del evento.
+
+    Returns:
+        Dict con resultado por canal: {
+            "telegram": "ok"|"error"|"skipped",
+            "telegram_error": Optional[str],
+            "whatsapp": "ok"|"error"|"skipped",
+            "whatsapp_error": Optional[str],
+        }
     """
+    result: dict = {"telegram": "skipped", "whatsapp": "skipped"}
+
     if not config.notifications_enabled:
         logger.debug(f"Notificaciones deshabilitadas para {config.user_id}")
-        return
+        result["telegram_error"] = "notifications_enabled=False"
+        return result
 
     kwargs["user_id"] = config.user_id
     message = get_notification_message(action, level=config.notification_level,
@@ -215,18 +244,30 @@ def notify(config: UserNotificationConfig, action: str, success: bool = True, **
     # 1. Telegram (canal primario)
     bot_token = settings.telegram_bot_token
     if bot_token and config.telegram_chat_id:
-        TelegramService(bot_token, config.telegram_chat_id).send_message(message)
-        logger.info(f"Notificación enviada a {config.telegram_chat_id}")
+        ok, err = TelegramService(bot_token, config.telegram_chat_id).send_message(message)
+        result["telegram"] = "ok" if ok else "error"
+        if not ok:
+            result["telegram_error"] = err
     elif config.telegram_chat_id and not bot_token:
-        logger.warning("TELEGRAM_BOT_TOKEN no configurado en el servidor")
+        msg = "TELEGRAM_BOT_TOKEN no configurado en el servidor"
+        logger.warning(msg)
+        result["telegram"] = "error"
+        result["telegram_error"] = msg
+    elif not config.telegram_chat_id:
+        result["telegram_error"] = "Sin telegram_chat_id"
 
     # 2. WhatsApp (canal secundario, best-effort)
     if config.whatsapp_phone and PYWHATKIT_AVAILABLE:
         plain_message = message.replace("*", "").replace("`", "")
         try:
             WhatsAppService(config.whatsapp_phone).send_message(plain_message)
+            result["whatsapp"] = "ok"
         except Exception as e:
             logger.warning(f"WhatsApp falló para {config.user_id}: {e}")
+            result["whatsapp"] = "error"
+            result["whatsapp_error"] = str(e)
+
+    return result
 
 
 # Helpers de alto nivel (uno por trigger del sistema)

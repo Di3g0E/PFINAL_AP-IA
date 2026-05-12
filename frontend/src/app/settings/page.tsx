@@ -89,17 +89,82 @@ export default function SettingsPage() {
   };
 
   const testNotification = async () => {
+    setError(null);
+    setSuccess(null);
     try {
       const token = localStorage.getItem("token");
-      await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL}/api/user/test-notification`, {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${token}`,
-          "ngrok-skip-browser-warning": "true",
-        },
-      });
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/user/test-notification`,
+        {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${token}`,
+            "ngrok-skip-browser-warning": "true",
+          },
+        }
+      );
+
+      if (!response.ok) {
+        // El backend devuelve {detail: "Telegram falló: ..."} en errores
+        let detail = `Error ${response.status}`;
+        try {
+          const body = await response.json();
+          detail = body.detail ?? detail;
+        } catch {
+          // ignore
+        }
+        throw new Error(detail);
+      }
+
+      setSuccess("✅ Notificación de prueba enviada a Telegram");
     } catch (err) {
-      console.error("Error sending test notification:", err);
+      const msg = (err as Error).message;
+      console.error("Error sending test notification:", msg);
+      setError(`No se pudo enviar la notificación de prueba: ${msg}`);
+    }
+  };
+
+  const runDiagnostic = async () => {
+    setError(null);
+    setSuccess(null);
+    try {
+      const token = localStorage.getItem("token");
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/user/telegram-status`,
+        {
+          headers: {
+            "Authorization": `Bearer ${token}`,
+            "ngrok-skip-browser-warning": "true",
+          },
+        }
+      );
+      if (!response.ok) {
+        throw new Error(`Error ${response.status}`);
+      }
+      const data = await response.json();
+
+      const lines: string[] = [];
+      lines.push(`Token configurado en servidor: ${data.token_configured ? "✅" : "❌"}`);
+      lines.push(`Chat ID guardado: ${data.chat_id_saved ?? "—"}`);
+      lines.push(`Notificaciones activas: ${data.notifications_enabled ? "✅" : "❌"}`);
+      lines.push(`Bot accesible: ${data.bot_reachable ? "✅" : "❌"}`);
+      if (data.bot_info) {
+        lines.push(`Bot real del servidor: @${data.bot_info.username} (${data.bot_info.first_name})`);
+      }
+      if (data.error) {
+        lines.push(`Error: ${data.error}`);
+      }
+
+      const text = lines.join("\n");
+      if (data.bot_info && data.bot_info.username !== "finances_guy_bot") {
+        setError(text + `\n⚠️ El bot del servidor (@${data.bot_info.username}) no coincide con @finances_guy_bot.`);
+      } else if (!data.token_configured || !data.bot_reachable) {
+        setError(text);
+      } else {
+        setSuccess(text);
+      }
+    } catch (err) {
+      setError(`Diagnóstico falló: ${(err as Error).message}`);
     }
   };
 
@@ -185,7 +250,7 @@ export default function SettingsPage() {
                   <div className="space-y-3">
                     <h4 className="font-medium text-blue-800">Configurar Telegram:</h4>
                     <ol className="text-sm text-blue-700 space-y-1 list-decimal list-inside">
-                      <li>Busca el bot <code>@P6SecurityBot</code> en Telegram</li>
+                      <li>Busca el bot <code>@finances_guy_bot</code> en Telegram</li>
                       <li>Envía <code>/start</code> al bot</li>
                       <li>Copia el ID que te muestra el bot</li>
                       <li>Pégalo en el campo de abajo</li>
@@ -266,24 +331,31 @@ export default function SettingsPage() {
                     Probar
                   </Button>
                 )}
+                <Button
+                  variant="ghost"
+                  onClick={runDiagnostic}
+                  title="Comprueba el estado del bot, token y chat_id"
+                >
+                  Diagnóstico
+                </Button>
               </div>
 
               {/* Mensajes de estado */}
               {error && (
-                <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg flex items-center">
-                  <svg className="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg flex items-start">
+                  <svg className="w-4 h-4 mr-2 mt-0.5 shrink-0" fill="currentColor" viewBox="0 0 20 20">
                     <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
                   </svg>
-                  {error}
+                  <span className="whitespace-pre-line text-sm">{error}</span>
                 </div>
               )}
 
               {success && (
-                <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg flex items-center">
-                  <svg className="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg flex items-start">
+                  <svg className="w-4 h-4 mr-2 mt-0.5 shrink-0" fill="currentColor" viewBox="0 0 20 20">
                     <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
                   </svg>
-                  {success}
+                  <span className="whitespace-pre-line text-sm">{success}</span>
                 </div>
               )}
             </CardContent>
