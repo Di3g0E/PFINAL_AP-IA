@@ -230,4 +230,3 @@ Documentación interactiva: `https://<usuario>-<nombre-space>.hf.space/docs` (Sw
 - Sofía Contreras
 
 *Curso 2025-26 — Grado en Ingeniería en Inteligencia Artificial — URJC*
-# PFINAL_AP-IA
