@@ -115,7 +115,15 @@ async function authedFetch(path: string, init: RequestInit = {}): Promise<Respon
   headers.set("ngrok-skip-browser-warning", "true");
   const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
   if (res.status === 401) {
+    // Sesión expirada o token inválido: limpia y manda al login. Es
+    // importante redirigir AQUÍ y no solo en cada página, porque varios
+    // puntos (OCR, refresh de pendientes, etc.) no manejaban el 401 y
+    // dejaban al usuario en una pantalla sin token, con los siguientes
+    // clicks devolviendo "Bearer token requerido".
     clearToken();
+    if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
+      window.location.replace("/login");
+    }
   }
   return res;
 }
