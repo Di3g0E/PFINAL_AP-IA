@@ -25,6 +25,15 @@ const PIE_COLORS = [
   "#ef4444", "#06b6d4", "#ec4899", "#84cc16",
 ];
 
+// Formatter del Tooltip de Recharts: el value llega tipado como
+// `string | number | (string|number)[] | undefined`, así que aceptamos
+// `unknown` y solo formateamos cuando es número.
+function formatEuro(value: unknown): string {
+  if (typeof value === "number") return `${value.toFixed(2)}€`;
+  if (typeof value === "string") return value;
+  return "";
+}
+
 export function ChatChart({ chart }: Props) {
   const [explanationOpen, setExplanationOpen] = useState(false);
 
@@ -75,13 +84,13 @@ function renderChart(
           nameKey="label"
           cx="50%" cy="50%"
           outerRadius="80%"
-          label={(entry: { label?: string }) => entry.label ?? ""}
+          label
         >
           {data.map((_, i) => (
             <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
           ))}
         </Pie>
-        <Tooltip formatter={(v: number) => `${v.toFixed(2)}€`} />
+        <Tooltip formatter={formatEuro} />
         <Legend />
       </PieChart>
     );
@@ -93,7 +102,7 @@ function renderChart(
         <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
         <XAxis dataKey="label" tick={{ fontSize: 11 }} />
         <YAxis tick={{ fontSize: 11 }} />
-        <Tooltip formatter={(v: number) => `${v.toFixed(2)}€`} />
+        <Tooltip formatter={formatEuro} />
         <Line type="monotone" dataKey="value" stroke="#3b82f6" strokeWidth={2}
               dot={{ r: 3, fill: "#3b82f6" }} />
       </LineChart>
@@ -106,7 +115,7 @@ function renderChart(
       <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
       <XAxis dataKey="label" tick={{ fontSize: 11 }} />
       <YAxis tick={{ fontSize: 11 }} />
-      <Tooltip formatter={(v: number) => `${v.toFixed(2)}€`} />
+      <Tooltip formatter={formatEuro} />
       <Bar dataKey="value" fill="#a855f7" radius={[4, 4, 0, 0]} />
     </BarChart>
   );
