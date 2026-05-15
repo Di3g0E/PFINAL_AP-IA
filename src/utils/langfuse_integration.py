@@ -111,18 +111,57 @@ def start_observation(
     user_id: Optional[str] = None,
     session_id: Optional[str] = None,
 ) -> ContextManager[Any]:
-    if not LANGFUSE_AVAILABLE or not settings.langfuse_secret_key or langfuse is None:
+    """Context manager para envolver una operación que se trazea en Langfuse.
+
+    En Langfuse v4 las observaciones se crean desde la INSTANCIA del cliente
+    (`client.start_as_current_observation(...)`), no desde el módulo. Esa
+    confusión era la causa del bug que dejaba el proyecto vacío en
+    cloud.langfuse.com aunque las keys eran válidas.
+    """
+    if not LANGFUSE_AVAILABLE or not settings.langfuse_secret_key:
         return nullcontext()
 
     _env_passthrough()
 
+    # Si init_langfuse() no se ha llamado todavía (p. ej. importación fuera
+    # del lifespan de FastAPI), obtenemos el cliente perezosamente.
+    client = langfuse_client
+    if client is None and get_client is not None:
+        try:
+            client = get_client()
+        except Exception as exc:
+            logger.warning(f"start_observation: no se pudo obtener cliente: {exc}")
+            return nullcontext()
+    if client is None:
+        return nullcontext()
+
+    # Adjuntamos user_id / session_id al metadata para que aparezcan en la
+    # UI de Langfuse asociados a la trace. En v4 no van como kwargs propios
+    # de la observación — viven en metadata o en update_trace().
+    meta: dict[str, Any] = dict(metadata or {})
+    if user_id:
+        meta.setdefault("user_id", user_id)
+    if session_id:
+        meta.setdefault("session_id", session_id)
+
     try:
-        return langfuse.start_as_current_observation(
+        ctx = client.start_as_current_observation(
             as_type=as_type,
             name=name,
             input=input,
-            metadata=metadata,
+            metadata=meta or None,
         )
+        # Propagamos user_id/session_id a la trace raíz si el SDK lo soporta.
+        if user_id or session_id:
+            try:
+                client.update_current_trace(
+                    user_id=user_id, session_id=session_id,
+                )
+            except Exception:
+                # En v4 update_current_trace puede no existir; el metadata
+                # ya lleva la info, así que ignoramos el fallo.
+                pass
+        return ctx
     except Exception as exc:
         logger.exception(f"Error creando observación Langfuse '{name}': {exc}")
         return nullcontext()
