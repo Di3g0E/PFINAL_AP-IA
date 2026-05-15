@@ -45,15 +45,32 @@ def monthly_summary(df: pd.DataFrame, year: Optional[int] = None,
     if df.empty:
         return AnalysisReport(type="summary", metrics={"empty": True})
     metrics = analytics.compute_monthly_summary(df, year=year, month=month)
+    # 3 barras: ingresos / gastos / ahorro. Sirve para que el frontend
+    # pinte el gráfico aunque la operación no sea una serie temporal.
+    series = []
+    for label, key in (("Ingresos", "income"), ("Gastos", "expenses"), ("Ahorro", "savings")):
+        if key in metrics:
+            try:
+                series.append(DataPoint(label=label, value=float(metrics[key])))
+            except (TypeError, ValueError):
+                pass
     return AnalysisReport(type="summary", period=metrics.get("period"),
-                          metrics=metrics)
+                          metrics=metrics, series=series)
 
 
 def category_breakdown(df: pd.DataFrame, period: Optional[str] = None) -> AnalysisReport:
     if df.empty:
         return AnalysisReport(type="category", metrics={"empty": True})
     metrics = analytics.compute_category_breakdown(df, period=period)
-    return AnalysisReport(type="category", period=period, metrics=metrics)
+    # Extraemos las categorías como series (label=area, value=total€) para
+    # que el frontend pueda dibujar el gráfico (bar o pie).
+    categories = metrics.get("categories", {}) or {}
+    series = [
+        DataPoint(label=area, value=float(data.get("total", 0)))
+        for area, data in categories.items()
+    ]
+    return AnalysisReport(type="category", period=period,
+                          metrics=metrics, series=series)
 
 
 def spending_trends(df: pd.DataFrame, n_months: int = 6) -> AnalysisReport:
@@ -83,7 +100,21 @@ def recurring_expenses(df: pd.DataFrame) -> AnalysisReport:
     if df.empty:
         return AnalysisReport(type="recurring", metrics={"empty": True, "items": []})
     items = analytics.compute_recurring_expenses(df)
-    return AnalysisReport(type="recurring", metrics={"items": items, "count": len(items)})
+    # Top 10 recurrentes por importe medio. Si los items vienen como dict,
+    # extraemos description+mean para etiquetar la barra.
+    series: list[DataPoint] = []
+    for it in (items or [])[:10]:
+        if not isinstance(it, dict):
+            continue
+        label = str(it.get("description") or it.get("name") or it.get("category") or "?")[:40]
+        amount = it.get("mean") or it.get("amount") or it.get("total") or 0
+        try:
+            series.append(DataPoint(label=label, value=float(amount)))
+        except (TypeError, ValueError):
+            pass
+    return AnalysisReport(type="recurring",
+                          metrics={"items": items, "count": len(items)},
+                          series=series)
 
 
 def recent_transactions(df: pd.DataFrame, n: int = 10) -> AnalysisReport:
