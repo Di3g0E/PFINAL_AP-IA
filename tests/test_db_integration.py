@@ -141,11 +141,16 @@ def test_persist_unknown_user_falls_back_to_memory(fresh_sqlite_db):
 
 def test_analyst_falls_back_to_csv_when_user_has_no_data(fresh_sqlite_db):
     """
-    Un usuario válido sin transacciones en BD: `_load_user_dataframe` debe
-    caer al CSV demo (no devolver DataFrame vacío).
+    Un usuario válido sin transacciones en BD: el data_source debe caer al
+    CSV demo (no devolver DataFrame vacío).
+
+    Tras la Fase 2, `_load_user_dataframe` se eliminó del orchestrator
+    (ahora la carga de datos vive en `/modules/p4/*` REST que llaman a
+    `data_source.load_user_transactions` directamente). El equivalente
+    actual del test es verificar `load_user_transactions` end-to-end.
     """
-    from src.agents.orchestrator.nodes import _load_user_dataframe
+    from src.agents.analyst.data_source import load_user_transactions
     user_id = fresh_sqlite_db
-    df = _load_user_dataframe(user_id)
+    df = load_user_transactions(user_id)
     # El CSV de demo tiene 887 filas → confirmamos que el fallback funcionó
     assert len(df) > 100

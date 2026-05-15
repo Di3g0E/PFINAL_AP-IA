@@ -29,7 +29,7 @@ from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import (
-    JSON, BigInteger, Boolean, CheckConstraint, Date, DateTime, ForeignKey,
+    JSON, Boolean, CheckConstraint, Date, DateTime, ForeignKey,
     Integer, LargeBinary, Numeric, String, Text, Uuid, func,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -175,7 +175,10 @@ class Event(Base):
     """
     __tablename__ = "events"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    # Idem ChatMessage.id: Integer en lugar de BigInteger para que SQLite
+    # autoincrementa. Postgres usa SERIAL — 2B eventos son suficientes para
+    # la retención de 90 días con el volumen esperado.
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True),
                                          server_default=func.now(), index=True)
     user_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid, index=True)
@@ -232,7 +235,11 @@ class ChatMessage(Base):
     """
     __tablename__ = "chat_messages"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    # Usamos Integer (no BigInteger) para que SQLite auto-incremente: el
+    # alias `INTEGER PRIMARY KEY` es el único que dispara el ROWID
+    # autoincrement en SQLite. En Postgres mapea a SERIAL (4 bytes, ~2B
+    # filas — suficiente para historial de chat por usuario).
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     session_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("chat_sessions.id", ondelete="CASCADE"),
         nullable=False, index=True,
