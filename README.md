@@ -157,15 +157,13 @@ Usa **SQLite** por defecto.
 5. CLI: `.venv/Scripts/python.exe main.py`
 6. API: `.venv/Scripts/python.exe -m uvicorn src.api.main:app --reload --port 8000`
 
-### Opción B — Docker Compose (stack completo con Postgres)
+### Opción B - ngrok
 
 ```bash
-docker compose up --build
+.venv\Scripts\python.exe -m uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
 # en otra terminal:
-docker compose exec api python scripts/init_db.py
+ngrok http --domain=aware-uncoiled-raffle.ngrok-free.dev 8000
 ```
-
-> Nota: el `Dockerfile` está pensado para HF Spaces (UID 1000, puerto 7860). En `docker-compose.yml` el mapping local sigue siendo `8000` para no romper la UX de desarrollo.
 
 ---
 

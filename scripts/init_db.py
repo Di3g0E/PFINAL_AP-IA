@@ -25,8 +25,7 @@ from pathlib import Path
 # Permite ejecutar `python scripts/init_db.py` directamente sin instalar el paquete.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sqlalchemy import inspect, select, text  # noqa: E402
-from sqlalchemy.engine import Engine  # noqa: E402
+from sqlalchemy import select  # noqa: E402
 
 from src.agents.analyst.data_source import load_from_csv  # noqa: E402
 from src.data.database import (  # noqa: E402
@@ -40,44 +39,10 @@ from src.utils.logging_config import configure_logging  # noqa: E402
 CSV_PATH = Path(__file__).resolve().parent.parent / "data" / "raw" / "db_mod_descript.csv"
 DEMO_EMAIL = "demo@p6.local"
 
-# Migraciones ligeras: columna → DDL ADD COLUMN.
-# Cuando aparezcan más cambios incrementales, añadir aquí. Si esto crece más
-# allá de unas pocas entradas, conviene migrar a Alembic.
-_PENDING_MIGRATIONS = {
-    "transactions": {
-        "status": "VARCHAR(16) NOT NULL DEFAULT 'accepted'",
-        "anomaly_reasons": "JSON",
-    },
-}
-
-
-def _apply_lightweight_migrations(engine: Engine) -> None:
-    """
-    Detecta columnas declaradas en `schema.py` que aún NO existen en la BD
-    y las añade con `ALTER TABLE ADD COLUMN`. Idempotente y no-destructivo.
-
-    SQLAlchemy.create_all() no toca tablas existentes, así que sin esto los
-    cambios incrementales del esquema solo se aplican con `--reset` (perdiendo
-    datos). Esta función cubre el 90 % de los casos comunes (añadir columna
-    con default) sin necesidad de Alembic. Para cambios más complejos
-    (rename, drop, type change) sí hará falta Alembic.
-    """
-    inspector = inspect(engine)
-    existing_tables = set(inspector.get_table_names())
-
-    for table_name, expected_cols in _PENDING_MIGRATIONS.items():
-        if table_name not in existing_tables:
-            continue   # `init_db` la creará completa desde el modelo
-        actual_cols = {c["name"] for c in inspector.get_columns(table_name)}
-        missing = {c: ddl for c, ddl in expected_cols.items() if c not in actual_cols}
-        if not missing:
-            continue
-        with engine.begin() as conn:
-            for col, col_ddl in missing.items():
-                conn.execute(text(
-                    f'ALTER TABLE {table_name} ADD COLUMN {col} {col_ddl}'
-                ))
-                print(f"Migración aplicada: ALTER TABLE {table_name} ADD COLUMN {col}")
+# Las migraciones ligeras (ALTER TABLE ADD COLUMN) viven ahora dentro de
+# `database.init_db()` para que se apliquen tanto en este script como en el
+# lifespan de FastAPI. Si necesitas añadir una columna nueva, edita
+# `_PENDING_MIGRATIONS` en `src/data/database.py`.
 
 
 def _create_demo_user(session) -> User:
@@ -157,12 +122,8 @@ def main() -> int:
         Base.metadata.drop_all(engine)
         print("Tablas eliminadas.")
 
-    init_db()
-    print("Tablas creadas.")
-
-    # Migraciones ligeras: añade columnas nuevas declaradas en el modelo a
-    # tablas que ya existían en BDs antiguas.
-    _apply_lightweight_migrations(engine)
+    init_db()  # crea tablas + aplica migraciones ligeras automáticamente
+    print("Tablas creadas y migraciones aplicadas.")
 
     with get_session() as session:
         _create_demo_user(session)

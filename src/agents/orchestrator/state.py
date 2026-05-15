@@ -27,6 +27,10 @@ class OrchestratorState(TypedDict, total=False):
     # Identidad
     user_id: str
     session_id: str
+    # Rol del usuario ('basic'|'advanced'). Condiciona el tono y nivel de
+    # detalle de la respuesta. Lo inyecta `chat.py` al invocar el grafo
+    # leyendo `users.role`. None → narrador asume 'basic'.
+    user_role: Optional[str]
 
     # Conversación
     messages: Annotated[list[BaseMessage], add_messages]

@@ -18,15 +18,11 @@ vuelva a elegir `delegate_analyst` y entre en bucle.
 
 from __future__ import annotations
 
-import inspect
 import re
 
-import pandas as pd
 from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 from loguru import logger
 
-from src.agents.analyst import agent as analyst
-from src.agents.analyst.data_source import load_user_transactions
 from src.agents.contracts import (
     AnalysisReport, ManualEntry, OrchestratorDecision,
     RegistryResult, RejectedItem, SecurityVerdict,
@@ -35,15 +31,12 @@ from src.agents.registrar import agent as registrar
 from src.agents.security import agent as security
 from src.agents.orchestrator.llm_factory import get_llm
 from src.agents.orchestrator.prompts import (
-    NARRATOR_SYSTEM_PROMPT, build_context_block, get_router_system_prompt,
+    CONVERSATIONAL_SYSTEM_PROMPT, NARRATOR_SYSTEM_PROMPT,
+    build_context_block, build_role_style_block, get_router_system_prompt,
 )
 from src.agents.orchestrator.state import MAX_ITERATIONS, OrchestratorState
+from src.agents.tools import analyst_tools, registrar_tools, security_tools
 from src.utils.logging_config import Stopwatch, log_event
-
-
-def _load_user_dataframe(user_id: str) -> pd.DataFrame:
-    """Alias local hacia el helper compartido (mantiene la API anterior)."""
-    return load_user_transactions(user_id)
 
 
 # Algunos LLMs filtran al final del texto la etiqueta de la accion que han
@@ -95,9 +88,14 @@ def _route(state: OrchestratorState, iterations: int) -> dict:
 
 
 def _narrate(state: OrchestratorState, iterations: int) -> dict:
-    """Produce el texto final en español a partir del slot poblado."""
+    """Produce el texto final en español a partir del slot poblado.
+
+    Inyecta un bloque de estilo basado en `state.user_role` para adaptar
+    el tono al perfil del usuario ('basic' vs 'advanced').
+    """
     user_id = state.get("user_id")
     session_id = state.get("session_id")
+    user_role = state.get("user_role")
 
     with Stopwatch(agent="orchestrator", action="narrate",
                    user_id=user_id, session_id=session_id) as sw:
@@ -109,6 +107,7 @@ def _narrate(state: OrchestratorState, iterations: int) -> dict:
         )
         prompt: list[BaseMessage] = [
             SystemMessage(content=NARRATOR_SYSTEM_PROMPT),
+            SystemMessage(content=build_role_style_block(user_role)),
             SystemMessage(content=context_block),
             *state.get("messages", []),
         ]
@@ -116,6 +115,7 @@ def _narrate(state: OrchestratorState, iterations: int) -> dict:
         text = response.content if hasattr(response, "content") else str(response)
         text = _strip_action_labels(text)
         sw.payload["chars"] = len(text)
+        sw.payload["role"] = user_role or "basic"
 
     return {
         "messages": [AIMessage(content=text)],
@@ -156,45 +156,41 @@ def orchestrator_node(state: OrchestratorState) -> dict:
 
 # Sub-agente Analyst: enruta la operación al módulo correspondiente.
 #
-# El LLM puede pasar kwargs alucinados que no estén en la firma real (p. ej.
-# `period` a `monthly_summary`). `_safe_kwargs` filtra el dict con la firma
-# real para que solo lleguen los argumentos válidos.
-
-def _safe_kwargs(func, args: dict) -> dict:
-    """Devuelve un dict con sólo los kwargs aceptados por `func`."""
-    sig = inspect.signature(func)
-    accepted = {
-        name for name, p in sig.parameters.items()
-        if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                      inspect.Parameter.KEYWORD_ONLY)
-    }
-    extras = set(args) - accepted
-    if extras:
-        logger.debug(f"_safe_kwargs descarta {extras} para {func.__name__}")
-    return {k: v for k, v in args.items() if k in accepted}
+# Dispatch del Analyst vía tools LangChain.
+#
+# Cada entrada es una función que recibe (user_id, args) y devuelve un
+# `AnalysisReport`. Los tools internamente hacen HTTP a /modules/p1 o
+# /modules/p4 — el `df` ya no se carga aquí, lo carga el router.
+#
+# Cumple el requisito de "los agentes deberán utilizarlos a través de tools"
+# del enunciado: el nodo invoca `tool.invoke({...})` en vez de funciones
+# Python in-process.
 
 
-# Cada handler recibe (df, args, user_id). Las ops puramente analíticas
-# ignoran user_id; las de objetivos lo necesitan para leer/escribir su tabla.
+def _invoke_tool(tool_obj, user_id: str, args: dict) -> AnalysisReport:
+    """Llama al tool LangChain pasando user_id + args y devuelve AnalysisReport."""
+    payload = {"user_id": user_id, **args}
+    return tool_obj.invoke(payload)
+
+
 _ANALYST_OPS = {
-    "monthly_summary":    lambda df, args, user_id: analyst.monthly_summary(df, **_safe_kwargs(analyst.monthly_summary, args)),
-    "category_breakdown": lambda df, args, user_id: analyst.category_breakdown(df, **_safe_kwargs(analyst.category_breakdown, args)),
-    "spending_trends":    lambda df, args, user_id: analyst.spending_trends(df, **_safe_kwargs(analyst.spending_trends, args)),
-    "savings_rate":       lambda df, args, user_id: analyst.savings_rate(df, **_safe_kwargs(analyst.savings_rate, args)),
-    "detect_anomalies":   lambda df, args, user_id: analyst.detect_anomalies(df),
-    "recurring_expenses": lambda df, args, user_id: analyst.recurring_expenses(df),
-    "recent_transactions": lambda df, args, user_id: analyst.recent_transactions(df, **_safe_kwargs(analyst.recent_transactions, args)),
-    "predict_next_month": lambda df, args, user_id: analyst.predict_next_month(df, **_safe_kwargs(analyst.predict_next_month, args)),
-    # Objetivos: si el LLM no pasa goals, check_goals los carga de BD por user_id.
-    "check_goals":        lambda df, args, user_id: analyst.check_goals(df, goals=args.get("goals"), user_id=user_id),
-    "set_goal":           lambda df, args, user_id: analyst.set_goal(user_id, **_safe_kwargs(analyst.set_goal, args)),
-    "list_goals":         lambda df, args, user_id: analyst.list_goals(user_id),
-    "remove_goal":        lambda df, args, user_id: analyst.remove_goal(user_id, **_safe_kwargs(analyst.remove_goal, args)),
+    "monthly_summary":     lambda args, uid: _invoke_tool(analyst_tools.monthly_summary,     uid, args),
+    "category_breakdown":  lambda args, uid: _invoke_tool(analyst_tools.category_breakdown,  uid, args),
+    "spending_trends":     lambda args, uid: _invoke_tool(analyst_tools.spending_trends,     uid, args),
+    "savings_rate":        lambda args, uid: _invoke_tool(analyst_tools.savings_rate,        uid, args),
+    "detect_anomalies":    lambda args, uid: _invoke_tool(analyst_tools.detect_anomalies,    uid, {}),
+    "recurring_expenses":  lambda args, uid: _invoke_tool(analyst_tools.recurring_expenses,  uid, {}),
+    "recent_transactions": lambda args, uid: _invoke_tool(analyst_tools.recent_transactions, uid, args),
+    "predict_next_month":  lambda args, uid: _invoke_tool(analyst_tools.predict_next_month,  uid, args),
+    "check_goals":         lambda args, uid: _invoke_tool(analyst_tools.check_goals,         uid, {}),
+    "set_goal":            lambda args, uid: _invoke_tool(analyst_tools.set_goal,            uid, args),
+    "list_goals":          lambda args, uid: _invoke_tool(analyst_tools.list_goals,          uid, {}),
+    "remove_goal":         lambda args, uid: _invoke_tool(analyst_tools.remove_goal,         uid, args),
 }
 
 
 def analyst_node(state: OrchestratorState) -> dict:
-    """Ejecuta la operación del Analyst indicada por el Orquestador."""
+    """Ejecuta la operación del Analyst indicada por el Orquestador (vía tools REST)."""
     user_id = state.get("user_id", "")
     session_id = state.get("session_id")
     decision = state.get("last_decision")
@@ -215,11 +211,7 @@ def analyst_node(state: OrchestratorState) -> dict:
             sw.payload["error"] = "unknown_op"
         else:
             try:
-                # Las ops de gestión de objetivos no necesitan el DataFrame,
-                # pero cargarlo es barato (cache) y mantener la firma uniforme
-                # simplifica el dispatcher.
-                df = _load_user_dataframe(user_id)
-                report = handler(df, args, user_id)
+                report = handler(args, user_id)
             except Exception as e:
                 logger.exception(f"Analyst {op} falló: {e}")
                 report = AnalysisReport(type="summary",
@@ -327,3 +319,47 @@ def registrar_node(state: OrchestratorState) -> dict:
             sw.payload["error"] = str(e)
 
     return {"registry_result": result}
+
+
+# Sub-agente Conversational: small-talk + preguntas sobre el sistema.
+#
+# Es el segundo "rol" claramente diferenciado del orquestador técnico
+# (Analyst/Registrar/Security). Genera la respuesta final directamente —
+# no escribe en ningún slot, así que el grafo va de este nodo a END
+# sin volver al orchestrator.
+
+def conversational_node(state: OrchestratorState) -> dict:
+    """Responde a saludos, gracias y preguntas generales sobre el sistema.
+
+    No invoca P1-P5 ni toca la BD. Aplica el bloque de estilo según
+    `state.user_role` y devuelve el texto final como AIMessage.
+    """
+    user_id = state.get("user_id")
+    session_id = state.get("session_id")
+    user_role = state.get("user_role")
+    iterations = state.get("iterations", 0)
+
+    with Stopwatch(agent="conversational", action="reply",
+                   user_id=user_id, session_id=session_id) as sw:
+        llm = get_llm(user_id=user_id)
+        prompt: list[BaseMessage] = [
+            SystemMessage(content=CONVERSATIONAL_SYSTEM_PROMPT),
+            SystemMessage(content=build_role_style_block(user_role)),
+            *state.get("messages", []),
+        ]
+        response = llm.invoke(prompt)
+        text = response.content if hasattr(response, "content") else str(response)
+        text = _strip_action_labels(text)
+        sw.payload["chars"] = len(text)
+        sw.payload["role"] = user_role or "basic"
+
+    return {
+        "messages": [AIMessage(content=text)],
+        # Marcamos la decisión como ya finalizada por este sub-agente, así
+        # el frontend identifica el badge ("Conversational") y el router
+        # del grafo termina la iteración.
+        "last_decision": OrchestratorDecision(
+            action="delegate_conversational", user_message=text,
+        ),
+        "iterations": iterations + 1,
+    }

@@ -83,10 +83,58 @@ def reset_engine() -> None:
 
 
 def init_db() -> None:
-    """Crea todas las tablas declaradas en schema.py si no existen."""
+    """Crea todas las tablas declaradas en schema.py si no existen.
+
+    También aplica migraciones ligeras (`ALTER TABLE ADD COLUMN`) para
+    columnas nuevas en tablas que ya existen — SQLAlchemy create_all no
+    toca tablas existentes.
+    """
     engine = get_engine()
     Base.metadata.create_all(engine)
+    _apply_lightweight_migrations(engine)
     logger.info("Esquema creado en la base de datos")
+
+
+# Columnas añadidas tras el primer despliegue que no existen en BDs antiguas.
+# Cada entrada es {tabla: {columna: ddl_que_acompaña_al_ADD}}. Idempotente:
+# si la columna ya existe se salta. Las cláusulas DEFAULT en `ALTER TABLE
+# ADD COLUMN` rellenan filas existentes.
+_PENDING_MIGRATIONS: dict[str, dict[str, str]] = {
+    "transactions": {
+        "status": "VARCHAR(16) NOT NULL DEFAULT 'accepted'",
+        "anomaly_reasons": "JSON",
+    },
+    "users": {
+        # role para Fase 3: 'basic' default, 'advanced' por opt-in en /settings.
+        "role": "VARCHAR(16) NOT NULL DEFAULT 'basic'",
+    },
+}
+
+
+def _apply_lightweight_migrations(engine: Engine) -> None:
+    """ALTER TABLE para columnas nuevas declaradas en schema.py.
+
+    Cubre el 90% de los cambios de esquema (añadir columna con default).
+    Para cambios complejos (rename, drop, type change) hace falta Alembic.
+    """
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    existing_tables = set(inspector.get_table_names())
+
+    for table_name, expected_cols in _PENDING_MIGRATIONS.items():
+        if table_name not in existing_tables:
+            continue  # init_db.create_all la habrá creado completa
+        actual_cols = {c["name"] for c in inspector.get_columns(table_name)}
+        missing = {c: ddl for c, ddl in expected_cols.items() if c not in actual_cols}
+        if not missing:
+            continue
+        with engine.begin() as conn:
+            for col, col_ddl in missing.items():
+                conn.execute(text(
+                    f"ALTER TABLE {table_name} ADD COLUMN {col} {col_ddl}"
+                ))
+                logger.info(f"Migración: ALTER TABLE {table_name} ADD COLUMN {col}")
 
 
 @contextmanager

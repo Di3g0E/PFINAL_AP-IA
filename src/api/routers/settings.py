@@ -4,19 +4,19 @@ Endpoints para la configuración de usuario y notificaciones.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
-import logging
+import uuid
+from typing import Any, Dict, Literal, Optional
 
 import requests
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from loguru import logger
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.api.dependencies import get_current_user_id
 from src.data.database import get_db
-from src.data.schema import UserSettings
+from src.data.schema import User, UserSettings
 from src.utils.config import settings as app_settings
 from src.utils.notifications import notify, UserNotificationConfig
 
@@ -131,6 +131,54 @@ async def update_settings(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error al actualizar configuración: {str(e)}"
         )
+
+
+# Rol del usuario (Fase 3: perfilado básico/avanzado)
+
+class UserRoleResponse(BaseModel):
+    role: Literal["basic", "advanced"] = Field(
+        ..., description="Rol que condiciona el tono y nivel de detalle de las respuestas",
+    )
+
+
+class UserRoleUpdate(BaseModel):
+    role: Literal["basic", "advanced"]
+
+
+def _get_user(db: Session, user_id: str) -> User:
+    try:
+        uid = uuid.UUID(user_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "user_id no es un UUID válido")
+    row = db.execute(select(User).where(User.id == uid)).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Usuario no encontrado")
+    return row
+
+
+@router.get("/role", response_model=UserRoleResponse,
+            summary="Devuelve el rol actual del usuario (basic|advanced)")
+def get_user_role(
+    user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+) -> UserRoleResponse:
+    row = _get_user(db, user_id)
+    return UserRoleResponse(role=row.role or "basic")  # type: ignore[arg-type]
+
+
+@router.put("/role", response_model=UserRoleResponse,
+            summary="Actualiza el rol del usuario (basic|advanced)")
+def update_user_role(
+    body: UserRoleUpdate,
+    user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+) -> UserRoleResponse:
+    row = _get_user(db, user_id)
+    row.role = body.role
+    db.flush()
+    db.refresh(row)
+    logger.info(f"role update: {user_id} → {row.role}")
+    return UserRoleResponse(role=row.role)  # type: ignore[arg-type]
 
 
 @router.post("/test-notification")

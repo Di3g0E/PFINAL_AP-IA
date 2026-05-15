@@ -271,6 +271,28 @@ export async function deleteChatSession(sessionId: string): Promise<void> {
   if (!res.ok && res.status !== 204) throw new Error(await parseError(res));
 }
 
+// Rol del usuario (Fase 3: perfilado básico/avanzado)
+
+export type UserRole = "basic" | "advanced";
+
+export async function getUserRole(): Promise<UserRole> {
+  const res = await authedFetch("/api/user/role");
+  if (!res.ok) throw new Error(await parseError(res));
+  const body = await res.json();
+  return body.role as UserRole;
+}
+
+export async function updateUserRole(role: UserRole): Promise<UserRole> {
+  const res = await authedFetch("/api/user/role", {
+    method: "PUT",
+    body: JSON.stringify({ role }),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  const body = await res.json();
+  return body.role as UserRole;
+}
+
+
 // Helpers de session_id en localStorage (clave: 'current_session_id').
 // Sirven para que al cambiar de pestaña Chat ↔ Pendientes se recupere
 // automáticamente la conversación abierta.

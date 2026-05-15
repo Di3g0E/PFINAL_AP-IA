@@ -30,6 +30,51 @@ type Turn = {
   action?: string | null;
 };
 
+// Mapeo de `last_action` → badge visible en cada respuesta del asistente.
+// Cumple el requisito "deberían distinguirse de alguna forma en la visualización"
+// del enunciado: el usuario ve a qué agente del grafo responde cada turno.
+type AgentBadge = { label: string; emoji: string; classes: string };
+
+const AGENT_BADGES: Record<string, AgentBadge> = {
+  delegate_analyst: {
+    label: "Analyst", emoji: "📊",
+    classes: "bg-blue-100 text-blue-700 border-blue-200",
+  },
+  delegate_registrar: {
+    label: "Registrar", emoji: "📝",
+    classes: "bg-emerald-100 text-emerald-700 border-emerald-200",
+  },
+  delegate_security: {
+    label: "Security", emoji: "🛡️",
+    classes: "bg-amber-100 text-amber-700 border-amber-200",
+  },
+  delegate_conversational: {
+    label: "Conversational", emoji: "💬",
+    classes: "bg-purple-100 text-purple-700 border-purple-200",
+  },
+  registrar: {
+    label: "Registrar", emoji: "📝",
+    classes: "bg-emerald-100 text-emerald-700 border-emerald-200",
+  },
+  respond_final: {
+    label: "Orchestrator", emoji: "🤖",
+    classes: "bg-slate-100 text-slate-700 border-slate-200",
+  },
+  ask_user: {
+    label: "Orchestrator", emoji: "❓",
+    classes: "bg-slate-100 text-slate-700 border-slate-200",
+  },
+};
+
+function getAgentBadge(action: string | null | undefined): AgentBadge {
+  if (!action) return AGENT_BADGES.respond_final;
+  return AGENT_BADGES[action] ?? {
+    label: action, emoji: "🤖",
+    classes: "bg-slate-100 text-slate-700 border-slate-200",
+  };
+}
+
+
 const SUGGESTIONS = [
   "resume mis gastos del último mes",
   "¿qué tendencia tienen mis gastos?",
@@ -454,13 +499,18 @@ export default function ChatPage() {
                           <p className={`text-sm whitespace-pre-wrap ${t.role === "user" ? "text-white" : "text-slate-800"}`}>
                             {t.text}
                           </p>
-                          {t.action && (
-                            <p className={`mt-2 text-xs uppercase tracking-wider ${
-                              t.role === "user" ? "text-blue-100" : "text-slate-500"
-                            }`}>
-                              {t.action}
-                            </p>
-                          )}
+                          {t.role === "assistant" && t.action && (() => {
+                            const b = getAgentBadge(t.action);
+                            return (
+                              <span
+                                className={`mt-2 inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full border ${b.classes}`}
+                                title={`Agente que respondió: ${b.label}`}
+                              >
+                                <span>{b.emoji}</span>
+                                <span>{b.label}</span>
+                              </span>
+                            );
+                          })()}
                         </div>
                       </div>
                     </div>

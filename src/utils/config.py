@@ -64,6 +64,11 @@ class Settings(BaseSettings):
     api_port: int = 8000
     cors_origins: str = "http://localhost:3000"
 
+    # URL base que los tools del agente usan para hablar con los módulos
+    # P1-P5 vía REST. En despliegues monoproceso (HF Space, Render, local)
+    # apunta a localhost; en multi-contenedor se puede cambiar al servicio.
+    internal_api_base_url: str = "http://localhost:8000"
+
     # JWT
     jwt_secret: str = "change-me-please"
     jwt_algorithm: str = "HS256"

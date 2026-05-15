@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { getUserId } from "@/lib/api";
+import { getUserId, getUserRole, updateUserRole, type UserRole } from "@/lib/api";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/Card";
@@ -18,6 +18,10 @@ export default function SettingsPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
+  // Rol del usuario (basic|advanced)
+  const [role, setRole] = useState<UserRole>("basic");
+  const [roleSaving, setRoleSaving] = useState(false);
+
   // Protege la ruta
   useEffect(() => {
     const uid = getUserId();
@@ -26,8 +30,34 @@ export default function SettingsPage() {
     } else {
       setUserId(uid);
       loadSettings();
+      loadRole();
     }
   }, [router]);
+
+  const loadRole = async () => {
+    try {
+      const r = await getUserRole();
+      setRole(r);
+    } catch (err) {
+      console.warn("getUserRole falló:", err);
+    }
+  };
+
+  const onChangeRole = async (newRole: UserRole) => {
+    if (newRole === role || roleSaving) return;
+    setRoleSaving(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const saved = await updateUserRole(newRole);
+      setRole(saved);
+      setSuccess(`Rol actualizado a "${saved}". El asistente adapta sus respuestas en tiempo real.`);
+    } catch (err) {
+      setError(`No se pudo actualizar el rol: ${(err as Error).message}`);
+    } finally {
+      setRoleSaving(false);
+    }
+  };
 
   const loadSettings = async () => {
     try {
@@ -183,6 +213,81 @@ export default function SettingsPage() {
           </p>
         </div>
         <div className="space-y-6">
+          {/* Perfil del asistente */}
+          <Card variant="glass">
+            <CardHeader>
+              <CardTitle className="flex items-center">
+                <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                </svg>
+                Perfil del asistente
+              </CardTitle>
+              <CardDescription>
+                Cómo el asistente adapta el tono y nivel de detalle de las respuestas a ti
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <label
+                  className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
+                    role === "basic"
+                      ? "border-blue-500 bg-blue-50/70"
+                      : "border-slate-200 bg-white/60 hover:border-slate-300"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="role"
+                    value="basic"
+                    checked={role === "basic"}
+                    onChange={() => onChangeRole("basic")}
+                    disabled={roleSaving}
+                    className="sr-only"
+                  />
+                  <div className="flex items-start space-x-3">
+                    <div className="text-2xl">🌱</div>
+                    <div className="flex-1">
+                      <p className="font-semibold text-slate-800">Básico</p>
+                      <p className="text-xs text-slate-500 mt-1">
+                        Lenguaje cotidiano, frases cortas, cifras redondeadas. Sin tecnicismos.
+                      </p>
+                    </div>
+                  </div>
+                </label>
+
+                <label
+                  className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
+                    role === "advanced"
+                      ? "border-purple-500 bg-purple-50/70"
+                      : "border-slate-200 bg-white/60 hover:border-slate-300"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="role"
+                    value="advanced"
+                    checked={role === "advanced"}
+                    onChange={() => onChangeRole("advanced")}
+                    disabled={roleSaving}
+                    className="sr-only"
+                  />
+                  <div className="flex items-start space-x-3">
+                    <div className="text-2xl">🎓</div>
+                    <div className="flex-1">
+                      <p className="font-semibold text-slate-800">Avanzado</p>
+                      <p className="text-xs text-slate-500 mt-1">
+                        Detallado: cifras con decimales, porcentajes, varianzas y términos financieros.
+                      </p>
+                    </div>
+                  </div>
+                </label>
+              </div>
+              {roleSaving && (
+                <p className="mt-3 text-xs text-slate-500">Guardando…</p>
+              )}
+            </CardContent>
+          </Card>
+
           {/* Notificaciones Telegram */}
           <Card variant="glass">
             <CardHeader>

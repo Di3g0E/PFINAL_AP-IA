@@ -47,9 +47,17 @@ class User(Base):
     passphrase_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     biometric_consent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     biometric_consent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # Rol del usuario: condiciona el tono y nivel de detalle de las respuestas.
+    #   'basic'    → frases cortas, lenguaje cotidiano, sin tecnicismos.
+    #   'advanced' → detallado, con cifras, métricas y términos técnicos.
+    role: Mapped[str] = mapped_column(String(16), nullable=False, default="basic")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),
                                                  server_default=func.now())
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        CheckConstraint("role IN ('basic', 'advanced')", name="ck_user_role"),
+    )
 
     settings: Mapped["UserSettings"] = relationship(back_populates="user",
                                                     uselist=False, cascade="all, delete-orphan")

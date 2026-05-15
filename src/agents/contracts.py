@@ -181,10 +181,14 @@ class AnalysisReport(BaseModel):
 class OrchestratorDecision(BaseModel):
     """Decisión de routing del LLM Orquestador para el siguiente paso del grafo."""
     action: Literal["delegate_security", "delegate_registrar",
-                    "delegate_analyst", "ask_user", "respond_final"] = Field(
+                    "delegate_analyst", "delegate_conversational",
+                    "ask_user", "respond_final"] = Field(
         description=("Sub-agente al que delegar, o si responder/preguntar al usuario "
                      "directamente. Usa 'delegate_analyst' para preguntas de "
-                     "análisis financiero. Usa 'ask_user' para pedir aclaración. "
+                     "análisis financiero, 'delegate_registrar' para alta de "
+                     "transacciones, 'delegate_conversational' para small-talk "
+                     "(saludos, gracias, preguntas sobre el sistema). "
+                     "Usa 'ask_user' para pedir aclaración. "
                      "Usa 'respond_final' SOLO si NO hace falta consultar ningún sub-agente.")
     )
     target_op: Optional[str] = Field(

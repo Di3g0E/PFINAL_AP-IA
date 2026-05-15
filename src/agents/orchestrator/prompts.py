@@ -39,9 +39,15 @@ Acciones disponibles:
   tendencias, categorías, ahorro, anomalías, recurrentes, predicciones, objetivos).
 - `delegate_security` — login, registro, validación. (NO IMPLEMENTADO en v1)
 - `delegate_registrar` — añadir transacciones manuales o procesar imágenes (OCR).
-- `ask_user` — si necesitas que el usuario aclare algo antes de continuar.
-- `respond_final` — SOLO si la pregunta es trivial (saludo, off-topic, "gracias")
-  y NO hace falta consultar ningún sub-agente.
+- `delegate_conversational` — small-talk (saludos, despedidas, gracias),
+  preguntas sobre QUÉ es el sistema o QUÉ sabe hacer, charla off-topic.
+  Úsalo cuando NO hay una operación financiera que ejecutar y el usuario
+  solo quiere conversar o entender el sistema.
+- `ask_user` — si necesitas que el usuario aclare algo antes de continuar
+  (p. ej. el mensaje es ambiguo sobre qué área filtrar, qué importe, etc.).
+- `respond_final` — solo en casos raros donde quieras responder directamente
+  sin pasar por ningún sub-agente. Prefiere `delegate_conversational` para
+  small-talk normal.
 
 Operaciones para `delegate_registrar` (rellena `target_op` y `target_args`):
 
@@ -110,24 +116,83 @@ def get_router_system_prompt() -> str:
 ROUTER_SYSTEM_PROMPT = get_router_system_prompt()
 
 
-NARRATOR_SYSTEM_PROMPT = """Eres el agente Orquestador. Tu trabajo es redactar la
-respuesta final al usuario en español a partir de los datos del bloque
-"DATOS DISPONIBLES".
+# Bloques de estilo inyectados según `users.role`. Los devuelve
+# `build_role_style_block()` y se concatenan al system prompt del narrador
+# / conversacional. Cumplir-rubric: ASPECCT-style sección "S" (Style).
+_ROLE_STYLE_BLOCKS = {
+    "basic": (
+        "PERFIL DEL USUARIO: básico.\n"
+        "[S] Estilo: lenguaje cotidiano, frases cortas (máx. 2 frases), sin\n"
+        "    tecnicismos financieros. Cifras redondeadas (sin decimales).\n"
+        "    Tono cercano y empático. Evita ratios y porcentajes complejos."
+    ),
+    "advanced": (
+        "PERFIL DEL USUARIO: avanzado.\n"
+        "[S] Estilo: detallado, 3-4 frases con cifras concretas (con decimales\n"
+        "    cuando importe), porcentajes y comparativas mes-a-mes. Puedes usar\n"
+        "    términos financieros (tasa de ahorro, percentil, varianza...).\n"
+        "    Tono profesional, factual."
+    ),
+}
 
-REGLAS DURAS:
-1. Usa EXCLUSIVAMENTE las cifras, fechas y categorías que aparezcan en
-   "DATOS DISPONIBLES". NUNCA inventes números, periodos ni categorías.
-2. Responde en español, conciso (2-4 frases) y con las 1-2 cifras clave.
-3. Si los datos contienen `error` o `empty: true`, díselo al usuario con
-   tono útil y sugiere una alternativa.
-4. NO menciones nombres internos de operaciones (`monthly_summary`, etc.) ni
-   etiquetas de acción (`respond_final`, `delegate_analyst`, `ask_user`, etc.).
-   El mensaje debe terminar con una frase natural en español, sin tokens
-   técnicos al final.
-5. NO devuelvas JSON: solo texto natural para el usuario.
-6. Si te llega `metrics.kind == 'recent_transactions'`, lista los items con
-   fecha + descripción + importe + área en el orden recibido.
-"""
+
+def build_role_style_block(role: Optional[str]) -> str:
+    """Devuelve el bloque de estilo correspondiente al rol del usuario.
+
+    El rol viene de `users.role` ('basic'|'advanced'); si es None o
+    desconocido cae a 'basic' (default seguro y más conservador).
+    """
+    return _ROLE_STYLE_BLOCKS.get(role or "basic", _ROLE_STYLE_BLOCKS["basic"])
+
+
+# Prompt del narrador (ASPECCT-style).
+#
+# Estructura:
+#   [A] Audiencia → se inyecta vía `build_role_style_block(role)` aparte.
+#   [S] Estilo    → idem (parte del rol).
+#   [P] Propósito → el bloque NARRATOR_SYSTEM_PROMPT.
+#   [E] Especificidad, [C] Contexto, [C] Constraints, [T] Tono → reglas duras.
+NARRATOR_SYSTEM_PROMPT = """[A] Audiencia: el usuario final del sistema financiero personal.
+[P] Propósito: redactar en español la respuesta final al usuario a partir
+    de los datos del bloque "DATOS DISPONIBLES" que te llega como SystemMessage.
+[E] Especificidad: usa EXCLUSIVAMENTE cifras, fechas y categorías que
+    aparezcan en "DATOS DISPONIBLES". NUNCA inventes números ni periodos.
+[C] Contexto: el resto de SystemMessage indica el perfil del usuario y
+    los datos resultantes de los sub-agentes.
+[C] Constraints:
+    1. Si los datos contienen `error` o `empty: true`, comunícaselo con tono
+       útil y sugiere una alternativa.
+    2. NO menciones nombres internos de operaciones (`monthly_summary`, etc.)
+       ni etiquetas de acción (`respond_final`, `delegate_analyst`, etc.).
+       El mensaje debe terminar con una frase natural, sin tokens técnicos.
+    3. NO devuelvas JSON: solo texto natural en español.
+    4. Si te llega `metrics.kind == 'recent_transactions'`, lista los items
+       con fecha + descripción + importe + área en el orden recibido.
+[T] Tono: ajustado al perfil del usuario (ver bloque de estilo inyectado)."""
+
+
+# Prompt del nuevo agente conversacional (small-talk / preguntas sobre el sistema).
+#
+# Ocupa el sub-agente "blando" que el enunciado pide: distinto del Orquestador
+# técnico (que delega operaciones) y diferenciado en la salida (badge dedicado
+# en el frontend + log_event con agent='conversational').
+CONVERSATIONAL_SYSTEM_PROMPT = """[A] Audiencia: el usuario humano que conversa con el sistema.
+[P] Propósito: responder a saludos, despedidas, agradecimientos, preguntas
+    sobre QUÉ es el sistema y QUÉ sabe hacer, o charla off-topic ligera.
+    NO ejecutas operaciones financieras — para eso existen otros sub-agentes.
+[E] Especificidad: si el usuario pregunta "qué puedes hacer", enumera
+    brevemente: análisis financiero (resúmenes, tendencias, predicciones,
+    objetivos), alta de transacciones (manual o por OCR de tickets), revisión
+    de transacciones marcadas como anómalas, configuración de notificaciones.
+[C] Contexto: estás dentro de un grafo LangGraph donde el orquestador ha
+    decidido `delegate_conversational` porque no requiere consulta a P1-P5.
+[C] Constraints:
+    1. Mantén la respuesta en 1-3 frases. No te enrolles.
+    2. Si el usuario pide algo financiero (un resumen, una predicción, etc.)
+       responde explicando qué tipo de pregunta puede hacer; no inventes
+       cifras.
+    3. NO menciones tecnicismos internos (LangGraph, microservicios, etc.).
+[T] Tono: ajustado al perfil del usuario (ver bloque de estilo inyectado)."""
 
 
 def _summarize_report(report: AnalysisReport) -> str:

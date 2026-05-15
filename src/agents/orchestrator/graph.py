@@ -40,7 +40,7 @@ from src.agents.contracts import (
     PendingAction, RegistryResult, SecurityVerdict,
 )
 from src.agents.orchestrator.nodes import (
-    analyst_node, orchestrator_node,
+    analyst_node, conversational_node, orchestrator_node,
     registrar_node, security_node,
 )
 from src.agents.orchestrator.state import OrchestratorState
@@ -68,6 +68,8 @@ def _route_after_orchestrator(state: OrchestratorState) -> str:
         return "security"
     if action == "delegate_registrar":
         return "registrar"
+    if action == "delegate_conversational":
+        return "conversational"
     return END  # ask_user o respond_final
 
 
@@ -79,6 +81,7 @@ def build_graph(checkpointer: Optional[BaseCheckpointSaver] = None) -> Any:
     builder.add_node("analyst", analyst_node)
     builder.add_node("security", security_node)
     builder.add_node("registrar", registrar_node)
+    builder.add_node("conversational", conversational_node)
 
     builder.add_edge(START, "orchestrator")
     builder.add_conditional_edges(
@@ -88,13 +91,17 @@ def build_graph(checkpointer: Optional[BaseCheckpointSaver] = None) -> Any:
             "analyst": "analyst",
             "security": "security",
             "registrar": "registrar",
+            "conversational": "conversational",
             END: END,
         },
     )
-    # Tras cada sub-agente, vuelta al orquestador para narrar/encadenar
+    # Tras Analyst/Security/Registrar, vuelta al orquestador para narrar/encadenar.
     builder.add_edge("analyst", "orchestrator")
     builder.add_edge("security", "orchestrator")
     builder.add_edge("registrar", "orchestrator")
+    # Conversational produce el texto final por sí mismo y termina la iteración:
+    # va directo a END en vez de volver al orquestador (no hay datos que narrar).
+    builder.add_edge("conversational", END)
 
     if checkpointer is None:
         serde = JsonPlusSerializer(allowed_msgpack_modules=_ALLOWED_CHECKPOINT_TYPES)

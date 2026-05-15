@@ -40,6 +40,7 @@ from src.agents.contracts import (
 from src.agents.registrar.classifier import FinancialClassifier
 from src.agents.registrar.ocr_engine import OCRTotalExtractor
 from src.agents.registrar.preprocessing import preprocess_text
+from src.agents.tools import registrar_tools, security_tools
 
 
 # Cargas perezosas de los recursos pesados
@@ -66,18 +67,33 @@ def _get_classifier() -> Optional[FinancialClassifier]:
         return None
 
 
-def _classify_area(description: str) -> list[str]:
-    """Predice el campo Area a partir de la descripción. Multilabel ('A, B' → ['A','B'])."""
+def _classify_area(user_id: str, description: str) -> list[str]:
+    """Predice el campo Area a partir de la descripción **vía tool REST** (P2).
+
+    Llama a `/modules/p2/classify-area` en lugar de invocar el clasificador
+    in-process. Si la llamada falla por red/auth, hace fallback al modelo
+    local cargado en memoria (modo defensivo: nunca rompe el alta).
+    """
+    try:
+        areas = registrar_tools.classify_area.invoke({
+            "user_id": user_id, "description": description,
+        })
+        if areas:
+            return list(areas)
+    except Exception as e:
+        logger.warning(f"classify_area tool falló, usando fallback local: {e}")
+
+    # Fallback in-process (mantenido por resiliencia: si /modules/p2 cae,
+    # el alta de transacción no se cae con él).
     clf = _get_classifier()
     if clf is None:
         return ["Other"]
     try:
         cleaned = preprocess_text(description)
         pred = clf.predict([cleaned])[0]
-        # El modelo de P2 puede devolver 'Leisure, Vacations' como una sola clase
         return [a.strip() for a in str(pred).split(",") if a.strip()]
     except Exception as e:
-        logger.error(f"Fallo en categorización: {e}")
+        logger.error(f"Fallback de categorización también falló: {e}")
         return ["Other"]
 
 
@@ -85,15 +101,35 @@ def _classify_area(description: str) -> list[str]:
 
 def _security_validate(draft: TransactionDraft) -> tuple[bool, list[str]]:
     """
-    Llama al agente Security para evaluar si la transacción es anómala.
+    Valida la transacción contra anomalías **vía tool REST** (P5).
+
+    Llama a `/modules/p5/validate-transaction` en lugar del agente Security
+    in-process. Si la llamada falla por red/auth, hace fallback al agente
+    local (la validación nunca queda "muda" — bloquearía altas legítimas).
 
     Devuelve (ok, reasons):
       - ok=True   → Security devolvió 'allow'. Persistir.
-      - ok=False  → Security devolvió 'challenge' o 'deny'. Encolar para revisión.
+      - ok=False  → Security devolvió 'challenge'/'deny'. Encolar para revisión.
     """
-    # Importación tardía para evitar ciclo registrar↔security
-    from src.agents.security import agent as security_agent
+    try:
+        verdict = security_tools.validate_transaction.invoke({
+            "user_id": draft.user_id,
+            "description": draft.description,
+            "date": draft.date,
+            "amount": float(draft.amount),
+            "area": list(draft.area),
+            "type": draft.type,
+            "source": draft.source,
+            "currency": draft.currency,
+        })
+        if verdict.decision == "allow":
+            return True, []
+        return False, verdict.anomaly_reasons or [verdict.reason]
+    except Exception as e:
+        logger.warning(f"validate_transaction tool falló, fallback in-process: {e}")
 
+    # Fallback in-process (importación tardía para evitar ciclo registrar↔security)
+    from src.agents.security import agent as security_agent
     verdict = security_agent.validate_transaction(draft)
     if verdict.decision == "allow":
         return True, []
@@ -172,7 +208,7 @@ def _persist_in_memory(
 
 def add_manual_transaction(entry: ManualEntry) -> RegistryResult:
     """Alta manual: clasifica si falta area, valida y persiste."""
-    area = entry.area or _classify_area(entry.description)
+    area = entry.area or _classify_area(entry.user_id, entry.description)
 
     draft = TransactionDraft(
         user_id=entry.user_id,
@@ -226,7 +262,7 @@ def add_from_image(upload: ImageUpload) -> RegistryResult:
 
     # 2. Construcción del draft
     description = upload.description_hint or "Compra (extraída de imagen)"
-    area = _classify_area(description)
+    area = _classify_area(upload.user_id, description)
     draft = TransactionDraft(
         user_id=upload.user_id,
         description=description,
@@ -277,7 +313,7 @@ def extract_from_image(upload: ImageUpload) -> OCRExtractResult:
         amount=Decimal(str(round(total, 2))),
         description_suggested=description,
         date_suggested=upload.date_hint or datetime.now(timezone.utc).date(),
-        area_suggested=_classify_area(description),
+        area_suggested=_classify_area(upload.user_id, description),
         type_suggested="Expenses",
     )
     return OCRExtractResult(extracted=extracted)

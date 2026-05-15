@@ -31,7 +31,7 @@ from src.agents.orchestrator.graph import build_graph
 from src.agents.orchestrator.llm_factory import get_llm
 from src.api.dependencies import get_current_user_id
 from src.data.database import get_db
-from src.data.schema import ChatMessage, ChatSession
+from src.data.schema import ChatMessage, ChatSession, User
 
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -122,6 +122,22 @@ def _persist_message(
     session.last_message_at = datetime.now(timezone.utc)
     db.flush()
     return msg
+
+
+def _load_user_role(db: Session, user_id: str) -> str:
+    """Lee `users.role` para inyectarlo en el estado del grafo.
+
+    Si la fila no existe o el rol está vacío, default 'basic' (más seguro:
+    respuestas más cortas y sin tecnicismos).
+    """
+    try:
+        uid = uuid.UUID(user_id)
+    except (TypeError, ValueError):
+        return "basic"
+    row = db.execute(select(User).where(User.id == uid)).scalar_one_or_none()
+    if row is None:
+        return "basic"
+    return row.role or "basic"
 
 
 def _autotitle_if_first(session: ChatSession, first_user_message: str) -> None:
@@ -277,6 +293,7 @@ def chat(
     if is_first_turn:
         _autotitle_if_first(session, req.message)
 
+    user_role = _load_user_role(db, user_id)
     prompt_messages = _build_prompt_messages(db, session)
 
     # thread_id único por turno: evita la acumulación implícita del
@@ -291,6 +308,7 @@ def chat(
                 "messages": prompt_messages,
                 "user_id": user_id,
                 "session_id": str(session.id),
+                "user_role": user_role,
                 # Slots reseteados por turno: evita que el narrador reaproveche
                 # datos del turno anterior cuando la pregunta nueva no los pide.
                 "iterations": 0,
