@@ -100,13 +100,17 @@ def log_event(
     msg: Optional[str] = None,
 ) -> None:
     """
-    Emite un evento estructurado al log.
+    Emite un evento estructurado al log Y persiste en la tabla `events`.
 
     Args:
-        agent: 'orchestrator'|'security'|'registrar'|'analyst'|'api'
+        agent: 'orchestrator'|'security'|'registrar'|'analyst'|'monitor'|'api'
         action: identificador corto del evento (snake_case)
         status: 'ok'|'error'|'denied'|'warning'
         payload: metadatos sin PII en claro
+
+    Persistencia BD: best-effort. Si la BD no está disponible o la inserción
+    falla, el evento se loguea igualmente. El agente Monitor lee de la tabla
+    `events` para calcular métricas agregadas (p50/p95, error_rate, etc.).
     """
     level = "INFO" if status == "ok" else ("ERROR" if status == "error" else "WARNING")
     logger.bind(
@@ -114,6 +118,62 @@ def log_event(
         latency_ms=latency_ms, user_id=user_id, session_id=session_id,
         payload=payload,
     ).log(level, msg or f"{agent}.{action} {status}")
+
+    _persist_event_safe(
+        agent=agent, action=action, status=status,
+        latency_ms=latency_ms, user_id=user_id, session_id=session_id,
+        payload=payload,
+    )
+
+
+def _persist_event_safe(
+    *,
+    agent: str, action: str, status: str,
+    latency_ms: Optional[int] = None,
+    user_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    payload: Optional[dict[str, Any]] = None,
+) -> None:
+    """Inserta un evento en la tabla `events` ignorando cualquier fallo.
+
+    Importación tardía de `src.data.database` y `src.data.schema` para
+    evitar ciclos al cargar `logging_config` durante el arranque.
+    """
+    try:
+        import uuid as _uuid
+
+        from src.data.database import get_session, is_database_configured
+        from src.data.schema import Event
+    except Exception:
+        return
+
+    if not is_database_configured():
+        return
+
+    def _to_uuid(s):
+        if s is None:
+            return None
+        try:
+            return _uuid.UUID(str(s))
+        except (TypeError, ValueError):
+            return None
+
+    try:
+        with get_session() as session:
+            session.add(Event(
+                user_id=_to_uuid(user_id),
+                session_id=_to_uuid(session_id),
+                agent=agent[:32],
+                action=action[:64],
+                status=status[:16],
+                latency_ms=latency_ms,
+                payload=payload or None,
+            ))
+    except Exception:
+        # No volver a loguear aquí — recursión potencial. El log original
+        # ya está emitido a stderr/fichero; perder la persistencia en BD
+        # de un evento ocasional no es crítico.
+        pass
 
 
 class Stopwatch:

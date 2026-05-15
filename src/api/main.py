@@ -20,6 +20,7 @@ Documentación interactiva: http://localhost:8000/docs (Swagger UI).
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
@@ -27,11 +28,49 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
-from src.api.routers import auth, chat, transactions, settings as settings_router
+from src.api.routers import auth, chat, monitor as monitor_router, transactions, settings as settings_router
 from src.api.routers.modules import p1 as module_p1, p2 as module_p2, p3 as module_p3, p4 as module_p4, p5 as module_p5
 from src.utils.config import settings
 from src.utils.langfuse_integration import init_langfuse, shutdown_langfuse
-from src.utils.logging_config import configure_logging
+from src.utils.logging_config import configure_logging, log_event
+
+
+_MONITOR_INTERVAL_SECONDS = 300  # 5 min entre snapshots del MonitorAgent
+
+
+async def _monitor_loop() -> None:
+    """Background task: el MonitorAgent evalúa el sistema cada N segundos.
+
+    Loguea un resumen (que también se persiste en `events` como un evento
+    `agent='monitor'`) sin bloquear el event loop principal. Si la BD no
+    está disponible o la evaluación falla, el monitor lo deja constancia y
+    sigue con el siguiente tick.
+    """
+    from src.agents.monitor import MonitorAgent
+    from src.utils.logging_config import log_event
+
+    monitor = MonitorAgent(window_minutes=60)
+    while True:
+        try:
+            report = await asyncio.to_thread(monitor.evaluate)
+            log_event(
+                agent="monitor", action="snapshot",
+                status="ok" if report.db_available else "warning",
+                payload={
+                    "health": report.health,
+                    "error_rate": report.error_rate,
+                    "total_events": report.total_events,
+                    "errors": report.error_count,
+                    "active_sessions": report.active_sessions,
+                    "active_users": report.active_users,
+                },
+            )
+        except Exception as e:
+            logger.warning(f"monitor_loop: tick falló: {e}")
+        try:
+            await asyncio.sleep(_MONITOR_INTERVAL_SECONDS)
+        except asyncio.CancelledError:
+            break
 
 
 @asynccontextmanager
@@ -41,6 +80,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     Llama a `init_db()` (idempotente) para que las tablas nuevas declaradas
     en `schema.py` se creen automáticamente en el siguiente deploy. SQLAlchemy
     `create_all` no toca tablas existentes, así que es seguro reejecutarlo.
+
+    Arranca el `monitor_loop` como background task: cada 5 minutos el
+    MonitorAgent evalúa la salud del sistema y registra un evento
+    `agent=monitor`/`action=snapshot`.
     """
     configure_logging()
     init_langfuse()
@@ -54,7 +97,17 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             logger.warning("DATABASE_URL no configurada; saltando init_db")
     except Exception as e:
         logger.exception(f"init_db falló al arrancar: {e}")
+
+    monitor_task = asyncio.create_task(_monitor_loop(), name="monitor_loop")
+    logger.info("Monitor agent: background loop arrancado (intervalo 5 min)")
+
     yield
+
+    monitor_task.cancel()
+    try:
+        await monitor_task
+    except (asyncio.CancelledError, Exception):
+        pass
     shutdown_langfuse()
     logger.info("FastAPI lifespan: cerrando")
 
@@ -83,6 +136,8 @@ app.include_router(auth.router)
 app.include_router(chat.router)
 app.include_router(transactions.router)
 app.include_router(settings_router.router)
+# Agente Monitor (Punto 4 del enunciado).
+app.include_router(monitor_router.router)
 
 # P1-P5 expuestos como microservicios REST (Fase 2 del enunciado).
 app.include_router(module_p1.router)
