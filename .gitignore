@@ -49,3 +49,7 @@ doc/
 !doc/figures/**.png
 !doc/figures/**.tex
 !doc/factura3.jpg
+!doc/prompts_aspect.md
+!doc/agent_contracts.md
+!doc/MEMORIA.md
+!doc/PRUEBAS.md
