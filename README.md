@@ -152,7 +152,7 @@ Usa **SQLite** por defecto.
 
 1. `uv venv .venv --python 3.12`
 2. `uv pip install -r requirements.txt`
-3. `cp .env.example .env` (configura `GROQ_API_KEY` y `MASTER_FERNET_KEY`).
+3. `cp .env.example .env` (configura `GROQ_API_KEY`, `MASTER_FERNET_KEY` y las claves Langfuse si usas observabilidad).
 4. `.venv/Scripts/python.exe scripts/init_db.py`
 5. CLI: `.venv/Scripts/python.exe main.py`
 6. API: `.venv/Scripts/python.exe -m uvicorn src.api.main:app --reload --port 8000`

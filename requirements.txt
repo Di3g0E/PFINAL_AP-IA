@@ -44,6 +44,7 @@ langchain-groq>=0.2.0
 langchain-openai>=0.2.10
 langchain-anthropic>=0.3.0
 langchain-google-genai>=2.0.0
+langfuse>=4.6.1
 
 # --- OCR — Agente Registrador (P3) ---
 paddlepaddle==2.6.2

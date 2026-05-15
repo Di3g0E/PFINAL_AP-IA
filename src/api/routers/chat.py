@@ -33,6 +33,7 @@ from src.agents.orchestrator.llm_factory import get_llm
 from src.api.dependencies import get_current_user_id
 from src.data.database import get_db
 from src.data.schema import ChatMessage, ChatSession, User
+from src.utils.langfuse_integration import propagate_user_context, start_observation
 
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -334,14 +335,21 @@ def _maybe_summarize(db: Session, session: ChatSession, user_id: str) -> None:
         new_block=new_block,
     )
 
-    try:
-        llm = get_llm(user_id=user_id)
-        response = llm.invoke(prompt)
-        new_summary = response.content if hasattr(response, "content") else str(response)
-        new_summary = new_summary.strip()
-    except Exception as e:
-        logger.warning(f"_maybe_summarize: LLM falló, conservando estado: {e}")
-        return
+    with start_observation(
+        name="chat.summarize",
+        as_type="span",
+        input={"summary_length": len(new_block), "session_id": str(session.id)},
+        user_id=user_id,
+        session_id=str(session.id),
+    ):
+        try:
+            llm = get_llm(user_id=user_id)
+            response = llm.invoke(prompt)
+            new_summary = response.content if hasattr(response, "content") else str(response)
+            new_summary = new_summary.strip()
+        except Exception as e:
+            logger.warning(f"_maybe_summarize: LLM falló, conservando estado: {e}")
+            return
 
     if not new_summary:
         logger.warning("_maybe_summarize: el LLM devolvió cadena vacía; saltando")
@@ -430,38 +438,50 @@ def chat(
         _autotitle_if_first(session, req.message)
 
     user_role = _load_user_role(db, user_id)
-    prompt_messages = _build_prompt_messages(db, session)
+    with start_observation(
+        name="chat.request",
+        as_type="span",
+        input={
+            "message": req.message,
+            "session_id": str(session.id),
+            "user_role": user_role,
+        },
+        user_id=user_id,
+        session_id=str(session.id),
+    ):
+        with propagate_user_context(user_id, str(session.id), metadata={"entry_point": "chat"}):
+            prompt_messages = _build_prompt_messages(db, session)
 
-    # thread_id único por turno: evita la acumulación implícita del
-    # MemorySaver de LangGraph. Cada invoke arranca con la lista que le
-    # pasamos explícitamente, leída de nuestra BD.
-    turn_thread_id = f"{user_id}:{session.id}:{uuid.uuid4()}"
-    config = {"configurable": {"thread_id": turn_thread_id}}
+            # thread_id único por turno: evita la acumulación implícita del
+            # MemorySaver de LangGraph. Cada invoke arranca con la lista que le
+            # pasamos explícitamente, leída de nuestra BD.
+            turn_thread_id = f"{user_id}:{session.id}:{uuid.uuid4()}"
+            config = {"configurable": {"thread_id": turn_thread_id}}
 
-    try:
-        final = _get_graph().invoke(
-            {
-                "messages": prompt_messages,
-                "user_id": user_id,
-                "session_id": str(session.id),
-                "user_role": user_role,
-                # Slots reseteados por turno: evita que el narrador reaproveche
-                # datos del turno anterior cuando la pregunta nueva no los pide.
-                "iterations": 0,
-                "analysis_report": None,
-                "security_verdict": None,
-                "registry_result": None,
-                "pending_action": None,
-                "last_decision": None,
-            },
-            config=config,
-        )
-    except Exception as e:
-        logger.exception(f"chat invoke falló: {e}")
-        raise HTTPException(
-            status.HTTP_500_INTERNAL_SERVER_ERROR,
-            f"Error en el grafo: {type(e).__name__}",
-        ) from e
+            try:
+                final = _get_graph().invoke(
+                    {
+                        "messages": prompt_messages,
+                        "user_id": user_id,
+                        "session_id": str(session.id),
+                        "user_role": user_role,
+                        # Slots reseteados por turno: evita que el narrador reaproveche
+                        # datos del turno anterior cuando la pregunta nueva no los pide.
+                        "iterations": 0,
+                        "analysis_report": None,
+                        "security_verdict": None,
+                        "registry_result": None,
+                        "pending_action": None,
+                        "last_decision": None,
+                    },
+                    config=config,
+                )
+            except Exception as e:
+                logger.exception(f"chat invoke falló: {e}")
+                raise HTTPException(
+                    status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    f"Error en el grafo: {type(e).__name__}",
+                ) from e
 
     last_msg = final["messages"][-1]
     decision = final.get("last_decision")

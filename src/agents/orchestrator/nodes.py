@@ -37,6 +37,7 @@ from src.agents.orchestrator.prompts import (
 from src.agents.orchestrator.state import MAX_ITERATIONS, OrchestratorState
 from src.agents.tools import analyst_tools, registrar_tools, security_tools
 from src.utils.logging_config import Stopwatch, log_event
+from src.utils.langfuse_integration import start_observation
 
 
 # Algunos LLMs filtran al final del texto la etiqueta de la accion que han
@@ -76,7 +77,14 @@ def _route(state: OrchestratorState, iterations: int) -> dict:
             SystemMessage(content=get_router_system_prompt()),
             *state.get("messages", []),
         ]
-        decision: OrchestratorDecision = router.invoke(prompt)
+        with start_observation(
+            name="orchestrator.route",
+            as_type="generation",
+            input={"prompt_length": len(prompt), "prior_action": state.get("last_decision")},
+            user_id=user_id,
+            session_id=session_id,
+        ):
+            decision: OrchestratorDecision = router.invoke(prompt)
         sw.payload["action"] = decision.action
         sw.payload["target_op"] = decision.target_op
 
@@ -111,7 +119,14 @@ def _narrate(state: OrchestratorState, iterations: int) -> dict:
             SystemMessage(content=context_block),
             *state.get("messages", []),
         ]
-        response = llm.invoke(prompt)
+        with start_observation(
+            name="orchestrator.narrate",
+            as_type="generation",
+            input={"report_present": bool(state.get("analysis_report")), "user_role": user_role},
+            user_id=user_id,
+            session_id=session_id,
+        ):
+            response = llm.invoke(prompt)
         text = response.content if hasattr(response, "content") else str(response)
         text = _strip_action_labels(text)
         sw.payload["chars"] = len(text)
@@ -170,7 +185,15 @@ def orchestrator_node(state: OrchestratorState) -> dict:
 def _invoke_tool(tool_obj, user_id: str, args: dict) -> AnalysisReport:
     """Llama al tool LangChain pasando user_id + args y devuelve AnalysisReport."""
     payload = {"user_id": user_id, **args}
-    return tool_obj.invoke(payload)
+    session_id = str(args.get("session_id")) if isinstance(args, dict) else None
+    with start_observation(
+        name="analyst.tool.invoke",
+        as_type="generation",
+        input={"tool_name": getattr(tool_obj, 'name', 'unknown'), "payload": payload},
+        user_id=user_id,
+        session_id=session_id,
+    ):
+        return tool_obj.invoke(payload)
 
 
 _ANALYST_OPS = {

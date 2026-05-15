@@ -30,6 +30,7 @@ from loguru import logger
 from src.api.routers import auth, chat, transactions, settings as settings_router
 from src.api.routers.modules import p1 as module_p1, p2 as module_p2, p3 as module_p3, p4 as module_p4, p5 as module_p5
 from src.utils.config import settings
+from src.utils.langfuse_integration import init_langfuse, shutdown_langfuse
 from src.utils.logging_config import configure_logging
 
 
@@ -42,6 +43,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     `create_all` no toca tablas existentes, así que es seguro reejecutarlo.
     """
     configure_logging()
+    init_langfuse()
     logger.info("FastAPI lifespan: arrancando")
     try:
         from src.data.database import init_db, is_database_configured
@@ -53,6 +55,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     except Exception as e:
         logger.exception(f"init_db falló al arrancar: {e}")
     yield
+    shutdown_langfuse()
     logger.info("FastAPI lifespan: cerrando")
 
 
