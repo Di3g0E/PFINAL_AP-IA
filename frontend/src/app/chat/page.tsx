@@ -15,12 +15,14 @@ import {
   getUserId,
   listChatSessions,
   setCurrentSessionId,
+  type ChartSpec,
   type ChatSessionOut,
   type ManualTransactionInput,
   type OCRExtracted,
 } from "@/lib/api";
 import { Button } from "@/components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
+import { ChatChart } from "@/components/ChatChart";
 import { Input } from "@/components/ui/Input";
 import { OCRConfirmModal } from "@/components/OCRConfirmModal";
 
@@ -28,6 +30,7 @@ type Turn = {
   role: "user" | "assistant";
   text: string;
   action?: string | null;
+  chart?: ChartSpec | null;
 };
 
 // Mapeo de `last_action` → badge visible en cada respuesta del asistente.
@@ -183,7 +186,7 @@ export default function ChatPage() {
       setCurrentSessionId(r.session_id);
       setTurns((t) => [
         ...t,
-        { role: "assistant", text: r.response, action: r.last_action },
+        { role: "assistant", text: r.response, action: r.last_action, chart: r.chart },
       ]);
       // Refresca el sidebar para que aparezca la sesión nueva o se
       // actualice `last_message_at`.
@@ -511,6 +514,9 @@ export default function ChatPage() {
                               </span>
                             );
                           })()}
+                          {t.role === "assistant" && t.chart && (
+                            <ChatChart chart={t.chart} />
+                          )}
                         </div>
                       </div>
                     </div>

@@ -19,10 +19,18 @@ export type TokenResponse = {
   liveness_score?: number | null;
 };
 
+export type ChartSpec = {
+  type: "line" | "bar" | "pie" | "area";
+  title: string;
+  data: { label: string; value: number }[];
+  explanation: string;
+};
+
 export type ChatResponse = {
   response: string;
   session_id: string;
   last_action?: string | null;
+  chart?: ChartSpec | null;
 };
 
 export type TransactionRecord = {

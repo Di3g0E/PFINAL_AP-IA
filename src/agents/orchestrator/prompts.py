@@ -97,6 +97,18 @@ REGLAS:
 - Si el sub-agente requerido no está implementado en v1, usa `respond_final`
   con un mensaje breve explicándolo.
 - Si la pregunta es ambigua, prefiere `ask_user` antes que adivinar.
+
+VISUALIZACIÓN DINÁMICA (extra en `delegate_analyst.target_args`):
+Si el usuario indica explícitamente cómo quiere ver los datos, añade el
+parámetro `chart_type` además de los argumentos de la operación analítica:
+
+  - "muéstralo como gráfico de barras" / "en barras"  → chart_type: "bar"
+  - "como un gráfico de líneas" / "en una línea"      → chart_type: "line"
+  - "como un gráfico circular" / "en pie" / "pastel"  → chart_type: "pie"
+  - "sin gráfico" / "solo el dato" / "quita el gráfico" → chart_type: "none"
+
+Si NO menciona tipo de gráfico, omite `chart_type` y se inferirá uno por
+defecto según el tipo de análisis (tendencia→línea, categoría→barras, etc.).
 """
 
 

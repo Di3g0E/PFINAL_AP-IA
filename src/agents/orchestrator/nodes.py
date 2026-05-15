@@ -201,6 +201,12 @@ def analyst_node(state: OrchestratorState) -> dict:
 
     op = decision.target_op or ""
     args = decision.target_args or {}
+
+    # Extraemos `chart_type` ANTES de pasar args al handler — es metadato del
+    # gráfico, no argumento de la operación analítica. Lo inyectamos al
+    # AnalysisReport tras la llamada para que `chat.py` decida el tipo de
+    # visualización final. Valores válidos: 'line'|'bar'|'pie'|'none'|None.
+    chart_type_override = args.pop("chart_type", None) if isinstance(args, dict) else None
     handler = _ANALYST_OPS.get(op)
 
     with Stopwatch(agent="analyst", action=op or "unknown",
@@ -217,6 +223,9 @@ def analyst_node(state: OrchestratorState) -> dict:
                 report = AnalysisReport(type="summary",
                                         metrics={"error": f"{type(e).__name__}: {e}"})
                 sw.payload["error"] = str(e)
+        if chart_type_override in ("line", "bar", "pie", "none"):
+            report = report.model_copy(update={"chart_type": chart_type_override})
+            sw.payload["chart_type_override"] = chart_type_override
         sw.payload["report_type"] = report.type
 
     return {"analysis_report": report}

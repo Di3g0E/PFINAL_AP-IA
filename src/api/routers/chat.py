@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
+from src.agents.contracts import AnalysisReport
 from src.agents.orchestrator.graph import build_graph
 from src.agents.orchestrator.llm_factory import get_llm
 from src.api.dependencies import get_current_user_id
@@ -122,6 +123,126 @@ def _persist_message(
     session.last_message_at = datetime.now(timezone.utc)
     db.flush()
     return msg
+
+
+# Generación de gráfico (Fase 4 — diagramas dinámicos + XAI)
+
+# Tipo de gráfico por defecto en función del `AnalysisReport.type`. Se
+# sobreescribe si el usuario pide explícitamente otro tipo (chart_type
+# en target_args del router).
+_DEFAULT_CHART_TYPE: dict[str, str] = {
+    "trend": "line",
+    "category": "bar",
+    "savings_rate": "line",
+    "prediction": "line",
+    "recurring": "bar",
+    "summary": "bar",
+    "anomaly": "bar",
+    "goal_status": "bar",
+}
+
+
+def _chart_title(report: AnalysisReport) -> str:
+    """Devuelve un título corto y humano para el gráfico."""
+    titles = {
+        "trend": "Tendencia mensual del gasto",
+        "category": f"Gasto por categoría{(' · ' + report.period) if report.period else ''}",
+        "savings_rate": "Tasa de ahorro mensual",
+        "prediction": "Predicción del próximo mes",
+        "recurring": "Gastos recurrentes detectados",
+        "summary": f"Resumen{(' · ' + report.period) if report.period else ''}",
+        "anomaly": "Anomalías detectadas",
+    }
+    return titles.get(report.type, "Visualización")
+
+
+_CHART_TYPE_ES = {
+    "line": "líneas",
+    "bar": "barras",
+    "pie": "sectores (pie)",
+    "area": "áreas",
+}
+
+
+def _build_xai_explanation(report: AnalysisReport, chart_type: str) -> str:
+    """Genera la explicación (XAI) que acompaña al gráfico.
+
+    Plantilla basada en `report.type`: enuncia QUÉ representa el gráfico y
+    destaca el dato clave (máximo, último valor, variación, etc.) para que
+    el usuario interprete lo que ve sin tener que inferirlo.
+    """
+    if not report.series:
+        return ""
+
+    series = report.series
+    chart_es = _CHART_TYPE_ES.get(chart_type, chart_type)
+    if report.type == "trend":
+        first = series[0].value
+        last = series[-1].value
+        delta = last - first
+        if abs(delta) < 1:
+            tendency = "estable"
+        elif delta > 0:
+            tendency = f"al alza (+{delta:.0f}€ en {len(series)} meses)"
+        else:
+            tendency = f"a la baja ({delta:.0f}€ en {len(series)} meses)"
+        return (
+            f"El gráfico de {chart_es} muestra la evolución mensual del gasto. "
+            f"La tendencia es {tendency}."
+        )
+    if report.type == "category":
+        top = max(series, key=lambda p: p.value)
+        total = sum(p.value for p in series)
+        pct = (top.value / total * 100) if total else 0
+        return (
+            f"Distribución del gasto por categoría. '{top.label}' es la categoría "
+            f"con mayor gasto: {top.value:.0f}€ ({pct:.0f}% del total)."
+        )
+    if report.type == "savings_rate":
+        last = series[-1].value
+        return (
+            f"Tasa de ahorro mensual (ingresos − gastos) / ingresos. "
+            f"Último valor: {last * 100:.1f}%."
+        )
+    if report.type == "prediction":
+        last = series[-1].value
+        predicted = report.metrics.get("predicted_amount")
+        if predicted is not None:
+            return (
+                f"Histórico mensual + predicción ({predicted:.0f}€). "
+                f"Compara la barra/punto final con los meses previos para juzgar la previsión."
+            )
+        return f"Histórico de los últimos {len(series)} meses como base para la predicción."
+    if report.type == "recurring":
+        return (
+            f"Se detectaron {len(series)} gastos recurrentes (suscripciones, "
+            f"facturas...). Las barras más altas son los recurrentes que más pesan."
+        )
+    return f"Visualización de los datos del análisis ({len(series)} puntos)."
+
+
+def _build_chart_spec(report: Optional[AnalysisReport]) -> Optional[dict[str, Any]]:
+    """Construye un `ChartSpec` desde un `AnalysisReport`. None si no aplica.
+
+    Reglas:
+      - `report` None o sin `series` → sin gráfico.
+      - `report.chart_type == 'none'` → usuario pidió quitar gráfico → None.
+      - En otro caso, usa `report.chart_type` si está, o el default según
+        `report.type`.
+    """
+    if report is None or not report.series:
+        return None
+    if report.chart_type == "none":
+        return None
+
+    chart_type = report.chart_type or _DEFAULT_CHART_TYPE.get(report.type, "bar")
+    data = [{"label": p.label, "value": float(p.value)} for p in report.series]
+    return {
+        "type": chart_type,
+        "title": _chart_title(report),
+        "data": data,
+        "explanation": _build_xai_explanation(report, chart_type),
+    }
 
 
 def _load_user_role(db: Session, user_id: str) -> str:
@@ -258,6 +379,14 @@ class ChatRequest(BaseModel):
     )
 
 
+class ChartSpecOut(BaseModel):
+    """Spec de gráfico que acompaña a la respuesta. Pydantic-friendly."""
+    type: str
+    title: str
+    data: list[dict[str, Any]] = []
+    explanation: str = ""
+
+
 class ChatResponse(BaseModel):
     response: str
     session_id: str
@@ -266,6 +395,13 @@ class ChatResponse(BaseModel):
         description=("Última `OrchestratorDecision.action` ejecutada: útil para que "
                      "el cliente sepa qué sub-agente se invocó "
                      "(`delegate_analyst`, `delegate_registrar`, etc.)."),
+    )
+    chart: Optional[ChartSpecOut] = Field(
+        None,
+        description=("Spec opcional de gráfico para renderizar junto a la "
+                     "respuesta. Presente cuando el Analyst devuelve datos "
+                     "con `series` no vacío y el usuario no ha pedido "
+                     "explícitamente 'sin gráfico'."),
     )
 
 
@@ -332,6 +468,11 @@ def chat(
     text = last_msg.content if hasattr(last_msg, "content") else str(last_msg)
     action = decision.action if decision else None
 
+    # Si la respuesta viene de un análisis con series temporales/categóricas,
+    # generamos un ChartSpec para que el frontend lo pinte junto al texto.
+    chart_dict = _build_chart_spec(final.get("analysis_report"))
+    chart = ChartSpecOut(**chart_dict) if chart_dict else None
+
     _persist_message(db, session, "assistant", text, action=action)
     _maybe_summarize(db, session, user_id)
 
@@ -339,6 +480,7 @@ def chat(
         response=text,
         session_id=str(session.id),
         last_action=action,
+        chart=chart,
     )
 
 

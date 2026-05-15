@@ -172,8 +172,31 @@ class AnalysisReport(BaseModel):
     metrics: dict[str, Any] = Field(default_factory=dict)
     series: list[DataPoint] = Field(default_factory=list)
     goal_alerts: list[GoalAlert] = Field(default_factory=list)
+    # Preferencia de tipo de gráfico que el usuario haya indicado por chat
+    # ("como barras", "en pie", "sin gráfico"). Si es None, `chat.py` elige
+    # el tipo por defecto según `type` del reporte (cf. _default_chart_type).
+    chart_type: Optional[Literal["line", "bar", "pie", "none"]] = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
+
+class ChartSpec(BaseModel):
+    """Especificación de un gráfico para renderizar en el frontend.
+
+    El backend la genera junto con la respuesta del chat cuando el
+    `AnalysisReport` tiene `series` no vacío. El frontend (Recharts) la
+    consume y dibuja el gráfico encima de la respuesta textual.
+    """
+    type: Literal["line", "bar", "pie", "area"]
+    title: str
+    data: list[dict[str, Any]] = Field(default_factory=list,
+                                       description="Lista de {label, value}.")
+    explanation: str = Field(
+        default="",
+        description=("Explicación breve (XAI) de lo que el gráfico muestra. "
+                     "Acompaña al gráfico para que el usuario entienda QUÉ "
+                     "está viendo además de cómo se compara."),
+    )
 
 
 # Agente Orquestador
