@@ -17,14 +17,30 @@ Origen: P5_AP-IA/src/utils/notification_service.py — adaptado para P6:
 
 from __future__ import annotations
 
+import socket
 import time
 from dataclasses import dataclass
 from typing import Literal, Optional
 
 import requests
+import urllib3.util.connection as _urllib3_conn
 from loguru import logger
 
 from src.utils.config import settings
+
+
+# Forzamos IPv4 al resolver hosts externos. En HF Spaces la ruta IPv6 hacia
+# api.telegram.org está rota o muy lenta y agota el timeout TCP antes de
+# probar IPv4. Sin este hack, las llamadas a Telegram se quedan colgadas
+# 10s y caen siempre por ReadTimeout/ConnectTimeout (visible en logs).
+#
+# Esto solo afecta a `requests` (y a cualquier librería que use urllib3 por
+# debajo). No fuerza a IPv4 a nivel de SO ni rompe otras conexiones.
+def _force_ipv4_family() -> int:
+    return socket.AF_INET
+
+
+_urllib3_conn.allowed_gai_family = _force_ipv4_family
 
 # pywhatkit arrastra pyautogui → mouseinfo, que al importarse trata de abrir
 # un display X. En entornos headless (HF Spaces, Docker sin GUI) eso lanza
