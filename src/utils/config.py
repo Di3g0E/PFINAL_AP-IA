@@ -95,6 +95,19 @@ class Settings(BaseSettings):
     log_format: Literal["json", "human"] = "json"
     log_file: str = "logs/app.log"
 
+    # Langfuse (monitorización humana de los agentes — Fase 6).
+    # Si los keys están vacíos, no se trazea nada (degrada elegante,
+    # no rompe). Crear cuenta gratuita en https://cloud.langfuse.com
+    # y pegar las keys aquí o en el cloud secret manager.
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_host: str = "https://cloud.langfuse.com"
+
+    @property
+    def langfuse_enabled(self) -> bool:
+        """True si Langfuse está configurado y se puede trazar."""
+        return bool(self.langfuse_public_key and self.langfuse_secret_key)
+
     # Paths derivadas
     project_root: Path = Path(__file__).resolve().parents[2]
 

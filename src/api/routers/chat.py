@@ -33,6 +33,7 @@ from src.agents.orchestrator.llm_factory import get_llm
 from src.api.dependencies import get_current_user_id
 from src.data.database import get_db
 from src.data.schema import ChatMessage, ChatSession, User
+from src.utils.langfuse_client import invoke_config as _lf_invoke_config
 
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -336,7 +337,14 @@ def _maybe_summarize(db: Session, session: ChatSession, user_id: str) -> None:
 
     try:
         llm = get_llm(user_id=user_id)
-        response = llm.invoke(prompt)
+        response = llm.invoke(
+            prompt,
+            config=_lf_invoke_config(
+                user_id=user_id, session_id=str(session.id),
+                agent="orchestrator", action="summarize",
+                extra_metadata={"messages_condensed": len(oldest)},
+            ),
+        )
         new_summary = response.content if hasattr(response, "content") else str(response)
         new_summary = new_summary.strip()
     except Exception as e:

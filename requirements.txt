@@ -66,6 +66,10 @@ nltk>=3.9.0
 # --- Cryptography (cifrado de embeddings + API keys de usuario) ---
 cryptography>=41.0.0
 
+# --- Observability (Fase 6: monitorización humana con Langfuse) ---
+# Si LANGFUSE_* no está configurado, los handlers son no-op y nada falla.
+langfuse>=2.50.0,<3.0.0
+
 # --- Notifications (Telegram + WhatsApp opcional) ---
 pywhatkit>=5.4
 requests>=2.31.0
