@@ -279,6 +279,48 @@ export async function deleteChatSession(sessionId: string): Promise<void> {
   if (!res.ok && res.status !== 204) throw new Error(await parseError(res));
 }
 
+// Monitor (Punto 4: monitorización automática del sistema)
+
+export type LatencyStats = {
+  agent: string;
+  action: string;
+  count: number;
+  p50_ms: number | null;
+  p95_ms: number | null;
+  max_ms: number | null;
+};
+
+export type TopError = {
+  agent: string;
+  action: string;
+  error_count: number;
+};
+
+export type MonitoringReport = {
+  generated_at: string;
+  window_minutes: number;
+  total_events: number;
+  ok_count: number;
+  error_count: number;
+  warning_count: number;
+  denied_count: number;
+  error_rate: number;
+  health: "ok" | "warning" | "critical";
+  latencies: LatencyStats[];
+  top_errors: TopError[];
+  active_sessions: number;
+  active_users: number;
+  db_available: boolean;
+  note: string | null;
+};
+
+export async function getMonitorReport(windowMinutes = 60): Promise<MonitoringReport> {
+  const res = await authedFetch(`/monitor/health-detailed?window_minutes=${windowMinutes}`);
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+
 // Rol del usuario (Fase 3: perfilado básico/avanzado)
 
 export type UserRole = "basic" | "advanced";

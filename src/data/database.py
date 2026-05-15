@@ -64,8 +64,18 @@ def get_engine() -> Engine:
         if url.startswith("sqlite"):
             _engine = create_engine(url, future=True)
         else:
-            _engine = create_engine(url, pool_pre_ping=True, pool_size=5,
-                                    max_overflow=10, future=True)
+            # `prepare_threshold=None` deshabilita los prepared statements
+            # de psycopg3. Imprescindible para el pooler de Supabase en modo
+            # Transaction (puerto 6543) — recicla conexiones entre queries y
+            # los nombres de prepared statements colisionan
+            # ("prepared statement '_pg3_0' already exists").
+            connect_args: dict = {}
+            if url.startswith(("postgresql://", "postgresql+psycopg://")):
+                connect_args["prepare_threshold"] = None
+            _engine = create_engine(
+                url, pool_pre_ping=True, pool_size=5, max_overflow=10,
+                future=True, connect_args=connect_args,
+            )
 
         _SessionLocal = sessionmaker(bind=_engine, autoflush=False, autocommit=False,
                                      expire_on_commit=False)

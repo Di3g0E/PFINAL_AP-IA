@@ -62,6 +62,7 @@ export function NavBar() {
             <>
               <Link href="/chat" className={linkCls("/chat")}>Chat</Link>
               <Link href="/pending" className={linkCls("/pending")}>Pendientes</Link>
+              <Link href="/admin/monitor" className={linkCls("/admin/monitor")}>Monitor</Link>
               <Link href="/settings" className={linkCls("/settings")}>Configuración</Link>
               <button
                 onClick={onLogout}

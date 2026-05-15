@@ -20,6 +20,15 @@ Documentación interactiva: http://localhost:8000/docs (Swagger UI).
 
 from __future__ import annotations
 
+# IMPORTANTE: este `os.environ[...]` DEBE ejecutarse antes de cualquier import
+# que cargue paddle/opentelemetry/protobuf. La instalación de langfuse v4
+# arrastró protobuf 6.x, incompatible con los _pb2.py de PaddleOCR 2.8 que
+# fueron generados con protoc 3.x ("Descriptors cannot be created directly").
+# Forzar el binding pure-Python de protobuf acepta ambos formatos. Es más
+# lento pero la carga de OCR es esporádica y no crítica en latencia.
+import os
+os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
+
 import asyncio
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
