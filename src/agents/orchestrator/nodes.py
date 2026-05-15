@@ -36,6 +36,7 @@ from src.agents.orchestrator.prompts import (
 )
 from src.agents.orchestrator.state import MAX_ITERATIONS, OrchestratorState
 from src.agents.tools import analyst_tools, registrar_tools, security_tools
+from src.utils.langfuse_client import invoke_config as _lf_invoke_config
 from src.utils.logging_config import Stopwatch, log_event
 from src.utils.langfuse_integration import start_observation
 
@@ -77,6 +78,7 @@ def _route(state: OrchestratorState, iterations: int) -> dict:
             SystemMessage(content=get_router_system_prompt()),
             *state.get("messages", []),
         ]
+<<<<<<< HEAD
         with start_observation(
             name="orchestrator.route",
             as_type="generation",
@@ -85,6 +87,15 @@ def _route(state: OrchestratorState, iterations: int) -> dict:
             session_id=session_id,
         ):
             decision: OrchestratorDecision = router.invoke(prompt)
+=======
+        decision: OrchestratorDecision = router.invoke(
+            prompt,
+            config=_lf_invoke_config(
+                user_id=user_id, session_id=session_id,
+                agent="orchestrator", action="route",
+            ),
+        )
+>>>>>>> a66404760ae4c5f961f8c1fb3dfd71d000011354
         sw.payload["action"] = decision.action
         sw.payload["target_op"] = decision.target_op
 
@@ -119,6 +130,7 @@ def _narrate(state: OrchestratorState, iterations: int) -> dict:
             SystemMessage(content=context_block),
             *state.get("messages", []),
         ]
+<<<<<<< HEAD
         with start_observation(
             name="orchestrator.narrate",
             as_type="generation",
@@ -127,6 +139,16 @@ def _narrate(state: OrchestratorState, iterations: int) -> dict:
             session_id=session_id,
         ):
             response = llm.invoke(prompt)
+=======
+        response = llm.invoke(
+            prompt,
+            config=_lf_invoke_config(
+                user_id=user_id, session_id=session_id,
+                agent="orchestrator", action="narrate",
+                extra_metadata={"role": user_role or "basic"},
+            ),
+        )
+>>>>>>> a66404760ae4c5f961f8c1fb3dfd71d000011354
         text = response.content if hasattr(response, "content") else str(response)
         text = _strip_action_labels(text)
         sw.payload["chars"] = len(text)
@@ -379,7 +401,14 @@ def conversational_node(state: OrchestratorState) -> dict:
             SystemMessage(content=build_role_style_block(user_role)),
             *state.get("messages", []),
         ]
-        response = llm.invoke(prompt)
+        response = llm.invoke(
+            prompt,
+            config=_lf_invoke_config(
+                user_id=user_id, session_id=session_id,
+                agent="conversational", action="reply",
+                extra_metadata={"role": user_role or "basic"},
+            ),
+        )
         text = response.content if hasattr(response, "content") else str(response)
         text = _strip_action_labels(text)
         sw.payload["chars"] = len(text)
