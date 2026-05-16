@@ -227,6 +227,7 @@ export default function ChatPage() {
             role: m.role as "user" | "assistant",
             text: m.content,
             action: m.action,
+            chart: m.chart,
           })),
       );
     } catch (err) {
