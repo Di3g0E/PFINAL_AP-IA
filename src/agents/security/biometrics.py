@@ -167,7 +167,17 @@ class BiometricPipeline:
         """MTCNN → bbox + landmarks → recorte alineado 224x224. None si no hay rostro."""
         self._ensure_mtcnn()
         image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-        boxes, probs, landmarks = self._mtcnn.detect(image_rgb, landmarks=True)
+        try:
+            boxes, probs, landmarks = self._mtcnn.detect(image_rgb, landmarks=True)
+        except RuntimeError as e:
+            # MTCNN tira `torch.cat(): expected a non-empty list of Tensors`
+            # cuando ningún candidato sobrevive a la P-Net (frame oscuro,
+            # vacío, demasiado pequeño...). Lo tratamos como "no hay cara"
+            # en lugar de propagar el RuntimeError, así el flujo de login
+            # falla con verdict deny "no se detectó rostro" en lugar de un
+            # crash genérico que bloquea al usuario.
+            logger.warning(f"_detect_and_align: MTCNN runtime error: {e}")
+            return None
         if boxes is None or probs is None or probs[0] is None:
             return None
         if probs[0] < 0.7:

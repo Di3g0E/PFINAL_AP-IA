@@ -117,6 +117,37 @@ async function parseError(res: Response): Promise<string> {
   }
 }
 
+/**
+ * Envuelve `fetch` para convertir errores de red (`TypeError: Failed to fetch`)
+ * en mensajes accionables. Causas frecuentes:
+ *   - El túnel ngrok no está levantado o cambió de subdominio.
+ *   - `NEXT_PUBLIC_API_BASE_URL` apunta a una URL que ya no responde.
+ *   - Mixed content (HTTPS frontend → HTTP backend).
+ *   - CORS bloqueó la respuesta.
+ *
+ * Si fuera un error HTTP normal (4xx/5xx) el fetch resuelve y dejamos que el
+ * llamador lo trate con `parseError`. Aquí solo capturamos el caso de "no se
+ * pudo abrir la conexión".
+ */
+async function safeFetch(input: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch (err) {
+    const e = err as Error;
+    // `TypeError` es lo que lanzan todos los navegadores cuando la petición
+    // ni siquiera llega a obtener respuesta del servidor.
+    if (e.name === "TypeError") {
+      throw new Error(
+        `No se pudo conectar con el backend (${API_BASE}). ` +
+        `Comprueba que el túnel ngrok está activo y que ` +
+        `NEXT_PUBLIC_API_BASE_URL apunta a la URL actual. ` +
+        `Detalle técnico: ${e.message}`,
+      );
+    }
+    throw e;
+  }
+}
+
 async function authedFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const token = getToken();
   const headers = new Headers(init.headers);
@@ -126,7 +157,7 @@ async function authedFetch(path: string, init: RequestInit = {}): Promise<Respon
   }
   // Evita la pagina de advertencia de ngrok-free en peticiones cross-origin.
   headers.set("ngrok-skip-browser-warning", "true");
-  const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
+  const res = await safeFetch(`${API_BASE}${path}`, { ...init, headers });
   if (res.status === 401) {
     // Sesión expirada o token inválido: limpia y manda al login. Es
     // importante redirigir AQUÍ y no solo en cada página, porque varios
@@ -170,7 +201,7 @@ export async function register(
   }
   // Si no hay face, no lo añadimos - el backend lo manejará como opcional
   
-  const res = await fetch(`${API_BASE}/auth/register`, {
+  const res = await safeFetch(`${API_BASE}/auth/register`, {
     method: "POST",
     body: fd,
     headers: { "ngrok-skip-browser-warning": "true" },
@@ -204,7 +235,7 @@ export async function login(
     }
   }
   
-  const res = await fetch(`${API_BASE}/auth/login`, {
+  const res = await safeFetch(`${API_BASE}/auth/login`, {
     method: "POST",
     body: fd,
     headers: { "ngrok-skip-browser-warning": "true" },

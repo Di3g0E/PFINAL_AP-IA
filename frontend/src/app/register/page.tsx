@@ -135,7 +135,11 @@ export default function RegisterPage() {
                   Foto biométrica
                 </label>
                 <div className="relative">
-                  <WebcamCapture onCapture={setFace} />
+                  {/* mode="photo" obligatorio: /auth/register espera JPEG/PNG.
+                      El default del componente es "video" (3.5s WebM) y enviar
+                      un WebM como face.jpg revienta el decoder del backend y
+                      en payloads grandes vía ngrok produce "Failed to fetch". */}
+                  <WebcamCapture mode="photo" onCapture={setFace} />
                   {face && (
                     <div className="absolute top-2 right-2 bg-green-500 text-white px-2 py-1 rounded-full text-xs flex items-center">
                       <svg className="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20">

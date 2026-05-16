@@ -13,8 +13,12 @@ from loguru import logger
 
 try:
     import mediapipe as mp
+    # Algunas builds modernas de mediapipe (p. ej. 0.10.35 en Python 3.12)
+    # eliminan el módulo legacy `mediapipe.solutions` y solo ofrecen la API
+    # `tasks`. Capturamos AttributeError además de ImportError para degradar
+    # con elegancia en ese caso (el challenge se desactiva silenciosamente).
     _mp_face_mesh = mp.solutions.face_mesh
-except ImportError:
+except (ImportError, AttributeError):
     mp = None
     _mp_face_mesh = None
 
@@ -61,8 +65,11 @@ def verify_blink_from_video(frames_bgr: list[np.ndarray],
     Returns:
         True si se detecta un parpadeo claro, False en caso contrario.
     """
-    if mp is None:
-        logger.warning("MediaPipe no está instalado. Challenge de parpadeo se saltará (aprueba por defecto).")
+    if mp is None or _mp_face_mesh is None:
+        logger.warning(
+            "MediaPipe.solutions no disponible (build sin API legacy). "
+            "Challenge de parpadeo se salta (aprueba por defecto)."
+        )
         return True
         
     if not frames_bgr:
