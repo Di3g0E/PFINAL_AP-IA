@@ -179,6 +179,24 @@ async def ocr_extract(
 
 
 @router.get(
+    "",
+    response_model=list[TransactionRecordOut],
+    summary="Listar todas las transacciones",
+)
+def list_transactions(
+    limit: int = 50,
+    user_id: str = Depends(get_current_user_id),
+) -> list[TransactionRecordOut]:
+    from src.database.session import get_session
+    from src.database.models import Transaction
+    from sqlalchemy import select
+    with get_session() as session:
+        stmt = select(Transaction).where(Transaction.user_id == user_id).order_by(Transaction.date.desc()).limit(limit)
+        records = session.execute(stmt).scalars().all()
+        return [_record_to_out(r) for r in records]
+
+
+@router.get(
     "/pending",
     response_model=list[PendingReviewOut],
     summary="Listar transacciones pendientes de revisión",

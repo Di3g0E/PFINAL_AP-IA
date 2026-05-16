@@ -21,9 +21,13 @@ export function NavBar() {
   const pathname = usePathname();
   const router = useRouter();
   const [isAuthed, setIsAuthed] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
-    const refresh = () => setIsAuthed(Boolean(getUserId()));
+    const refresh = () => {
+      setIsAuthed(Boolean(getUserId()));
+      setIsAdmin(getUserId() === "admin");
+    };
     refresh();
     window.addEventListener("storage", refresh);
     window.addEventListener("auth-change", refresh);
@@ -62,7 +66,8 @@ export function NavBar() {
             <>
               <Link href="/chat" className={linkCls("/chat")}>Chat</Link>
               <Link href="/pending" className={linkCls("/pending")}>Pendientes</Link>
-              <Link href="/admin/monitor" className={linkCls("/admin/monitor")}>Monitor</Link>
+              <Link href="/records" className={linkCls("/records")}>Registros</Link>
+              {isAdmin && <Link href="/admin/monitor" className={linkCls("/admin/monitor")}>Monitor</Link>}
               <Link href="/settings" className={linkCls("/settings")}>Configuración</Link>
               <button
                 onClick={onLogout}

@@ -447,3 +447,21 @@ export async function rejectPending(id: string): Promise<{ id: string; status: s
   if (!res.ok) throw new Error(await parseError(res));
   return res.json();
 }
+
+export async function listTransactions(): Promise<TransactionRecord[]> {
+  const res = await authedFetch("/transactions");
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+export async function classifyArea(description: string): Promise<string> {
+  const fd = new FormData();
+  fd.append("text", description);
+  const res = await authedFetch("/modules/p2/classify-area", {
+    method: "POST",
+    body: fd,
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  const data = await res.json();
+  return data.predicted_category;
+}
