@@ -64,6 +64,13 @@ statsmodels>=0.14.0
 # --- NLP — Agente Registrador (P2) ---
 nltk>=3.9.0
 
+# --- Evolución E1 — Clasificador híbrido (P2) ---
+# Transformer multilingüe (MiniLM 384-d, ~120 MB) para zero-shot y como
+# extractor de features del SGDClassifier personal por usuario. Detección
+# de idioma para metadatos i18n.
+sentence-transformers>=2.7.0,<3.0
+langdetect>=1.0.9
+
 # --- Cryptography (cifrado de embeddings + API keys de usuario) ---
 cryptography>=41.0.0
 

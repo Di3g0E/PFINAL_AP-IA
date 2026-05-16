@@ -65,6 +65,9 @@ class LoginRequest(BaseModel):
     email: str
     passphrase: str
     face_image: bytes
+    # E3 Fase 1: vídeo WebM opcional. Si presente, se usa en lugar de
+    # face_image para extraer embeddings de N frames con voto promedio.
+    face_video: Optional[bytes] = None
 
 
 class SecurityVerdict(BaseModel):
@@ -120,10 +123,33 @@ class RegistryResult(BaseModel):
     rejected: list[RejectedItem] = Field(default_factory=list)
 
 
+class InvoiceMetadata(BaseModel):
+    """Campos estructurados extraídos por el OCR enriquecido (E2).
+
+    Todos son opcionales: si el OCR no detecta un campo con confianza,
+    se omite. Se persiste como JSON en `Transaction.metadata` para
+    no romper el esquema relacional.
+    """
+    nif: Optional[str] = None
+    merchant: Optional[str] = None
+    iva_pct: Optional[float] = None
+    iva_amount: Optional[Decimal] = None
+    payment_method: Optional[str] = None
+    raw_text_excerpt: Optional[str] = None
+    confidence: dict[str, float] = Field(
+        default_factory=dict,
+        description="Confianza por campo, e.g. {'total': 0.95, 'fecha': 0.80}.",
+    )
+
+
 class ExtractedTransaction(BaseModel):
     """
     Borrador extraído por OCR pero **sin persistir**: el usuario lo revisa
     y confirma/edita antes de que se cree la transacción real.
+
+    Tras E2 incluye `metadata` con campos adicionales (NIF, comercio,
+    IVA, método de pago). El front puede mostrarlos para que el usuario
+    los confirme/edite.
     """
     amount: Decimal
     description_suggested: str
@@ -131,6 +157,7 @@ class ExtractedTransaction(BaseModel):
     area_suggested: list[str] = Field(default_factory=list)
     type_suggested: TransactionType = "Expenses"
     currency: str = "EUR"
+    metadata: Optional[InvoiceMetadata] = None
 
 
 class OCRExtractResult(BaseModel):

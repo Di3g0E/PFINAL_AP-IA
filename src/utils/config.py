@@ -90,6 +90,22 @@ class Settings(BaseSettings):
     # Relativa al `project_root` (raíz del repo).
     liveness_model_path: str = "models/liveness_kaggle.pth"
 
+    # --- E3 Feature flags (Biometría con vídeo + anti-spoofing) ---
+    #
+    # Fase 1: Acepta vídeo WebM en /auth/login y promedia embeddings de
+    #         N frames. Si False, solo acepta imagen (single-frame legacy).
+    security_video_enabled: bool = True
+    # Fase 2: Silent-Face Anti-Spoofing ONNX. Requiere modelo en models/.
+    #         Degrada elegante si el modelo no existe (warning y skip).
+    security_antispoof_enabled: bool = True
+    # Número de frames equiespaciados a muestrear del vídeo.
+    security_video_n_frames: int = 10
+    # Umbral de anti-spoofing (mediana de scores por frame). ∈ [0,1].
+    security_antispoof_threshold: float = 0.55
+    # Fase 3: Challenge-response (parpadeo) activo. Utiliza MediaPipe para
+    #         validar si la persona está viva.
+    security_challenges_enabled: bool = True
+
     # Logging
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     log_format: Literal["json", "human"] = "json"

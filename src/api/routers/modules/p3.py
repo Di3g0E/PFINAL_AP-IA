@@ -1,9 +1,9 @@
 """
-P3 — OCR de tickets/facturas (PaddleOCR).
+P3 — OCR de tickets/facturas (PaddleOCR) — Evolución E2.
 
-Expone el extractor de totales de imagen (`OCRTotalExtractor`) y la función de
-alto nivel `registrar.extract_from_image` que además sugiere descripción /
-fecha / área.
+Expone el extractor enriquecido de facturas EUR (`EnrichedOCRExtractor`)
+que, además del total, devuelve fecha, NIF/CIF, comercio, IVA y método
+de pago extraídos del texto OCR.
 
 Endpoints:
   - POST /modules/p3/ocr-extract  (multipart: image + opcionales)
@@ -21,9 +21,9 @@ from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from loguru import logger
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from src.agents.contracts import ImageUpload
+from src.agents.contracts import ImageUpload, InvoiceMetadata
 from src.agents.registrar import agent as registrar
 from src.api.dependencies import get_current_user_id
 
@@ -36,18 +36,33 @@ _MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10 MB
 
 
 class OCRExtractedOut(BaseModel):
+    """Resultado de la extracción OCR enriquecida (E2).
+
+    Incluye los campos clásicos (amount, description, date, area, type,
+    currency) más `metadata` con los campos estructurados extraídos por
+    el OCR EUR-aware (NIF, comercio, IVA, método de pago, confianza).
+    """
     amount: Decimal
     description_suggested: str
     date_suggested: date
     area_suggested: list[str]
     type_suggested: Literal["Income", "Expenses"]
     currency: str
+    metadata: Optional[InvoiceMetadata] = Field(
+        default=None,
+        description=(
+            "Campos estructurados extraídos por el OCR enriquecido (E2): "
+            "NIF/CIF, comercio, IVA (porcentaje e importe), método de pago. "
+            "Todos opcionales; se incluyen solo cuando el OCR los detecta "
+            "con confianza suficiente."
+        ),
+    )
 
 
 @router.post(
     "/ocr-extract",
     response_model=OCRExtractedOut,
-    summary="OCR de un ticket: extrae total y propone descripción/fecha/área (P3)",
+    summary="OCR de un ticket: extrae total, fecha, NIF, comercio, IVA y propone descripción/área (P3 E2)",
 )
 async def ocr_extract(
     image: UploadFile = File(..., description="JPEG/PNG/WebP/HEIC, máx 10 MB"),
@@ -96,4 +111,5 @@ async def ocr_extract(
         area_suggested=e.area_suggested,
         type_suggested=e.type_suggested,
         currency=e.currency,
+        metadata=e.metadata,
     )

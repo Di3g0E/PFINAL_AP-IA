@@ -34,11 +34,15 @@ import numpy as np
 from loguru import logger
 
 from src.agents.contracts import (
-    ExtractedTransaction, ImageUpload, ManualEntry, OCRExtractResult,
-    RegistryResult, RejectedItem, ReviewItem, TransactionDraft, TransactionRecord,
+    ExtractedTransaction, ImageUpload, InvoiceMetadata, ManualEntry,
+    OCRExtractResult, RegistryResult, RejectedItem, ReviewItem,
+    TransactionDraft, TransactionRecord,
 )
 from src.agents.registrar.classifier import FinancialClassifier
 from src.agents.registrar.ocr_engine import OCRTotalExtractor
+from src.agents.registrar.ocr_engine_eur import (
+    EnrichedOCRExtractor, generate_description,
+)
 from src.agents.registrar.preprocessing import preprocess_text
 from src.agents.tools import registrar_tools, security_tools
 
@@ -48,9 +52,19 @@ from src.agents.tools import registrar_tools, security_tools
 _CLF: Optional[FinancialClassifier] = None
 _CLF_PATH = Path(__file__).resolve().parents[3] / "models" / "area_classifier.joblib"
 
+# Si el transformer no está instalado o falla la primera carga, el híbrido
+# se desactiva y se cae al `FinancialClassifier` legacy. Estado en módulo
+# para evitar reintentos costosos por petición.
+_HYBRID_DISABLED: bool = False
+
 
 def _get_classifier() -> Optional[FinancialClassifier]:
-    """Devuelve el clasificador entrenado. None si no hay modelo en disco."""
+    """Devuelve el clasificador legacy. None si no hay modelo en disco.
+
+    Se mantiene como fallback del `HybridClassifier` (E1) cuando el
+    transformer multilingüe no está disponible (p. ej. en entornos de
+    test que mockean `sentence-transformers`).
+    """
     global _CLF
     if _CLF is not None:
         return _CLF
@@ -60,31 +74,15 @@ def _get_classifier() -> Optional[FinancialClassifier]:
         return None
     try:
         _CLF = FinancialClassifier.load(_CLF_PATH)
-        logger.info(f"Clasificador de área cargado desde {_CLF_PATH}")
+        logger.info(f"Clasificador de área (legacy) cargado desde {_CLF_PATH}")
         return _CLF
     except Exception as e:
-        logger.error(f"Fallo al cargar el clasificador: {e}")
+        logger.error(f"Fallo al cargar el clasificador legacy: {e}")
         return None
 
 
-def _classify_area(user_id: str, description: str) -> list[str]:
-    """Predice el campo Area a partir de la descripción **vía tool REST** (P2).
-
-    Llama a `/modules/p2/classify-area` en lugar de invocar el clasificador
-    in-process. Si la llamada falla por red/auth, hace fallback al modelo
-    local cargado en memoria (modo defensivo: nunca rompe el alta).
-    """
-    try:
-        areas = registrar_tools.classify_area.invoke({
-            "user_id": user_id, "description": description,
-        })
-        if areas:
-            return list(areas)
-    except Exception as e:
-        logger.warning(f"classify_area tool falló, usando fallback local: {e}")
-
-    # Fallback in-process (mantenido por resiliencia: si /modules/p2 cae,
-    # el alta de transacción no se cae con él).
+def _legacy_classify(description: str) -> list[str]:
+    """Predicción in-process con el modelo TF-IDF + SGDClassifier global."""
     clf = _get_classifier()
     if clf is None:
         return ["Other"]
@@ -93,8 +91,83 @@ def _classify_area(user_id: str, description: str) -> list[str]:
         pred = clf.predict([cleaned])[0]
         return [a.strip() for a in str(pred).split(",") if a.strip()]
     except Exception as e:
-        logger.error(f"Fallback de categorización también falló: {e}")
+        logger.error(f"Clasificador legacy falló: {e}")
         return ["Other"]
+
+
+def classify_area_full(user_id: str, description: str) -> dict:
+    """Predicción con metadatos (modo + confianza + tamaño de historial).
+
+    Es el contrato del endpoint `/modules/p2/classify-area` tras E1.
+    Devuelve `{area: list[str], confidence: float, mode: str,
+    user_history_size: int}`. Si el `HybridClassifier` (transformer)
+    no está disponible, cae al legacy con `mode='legacy'`.
+    """
+    global _HYBRID_DISABLED
+    if not _HYBRID_DISABLED:
+        try:
+            from src.agents.registrar.classifier_hybrid import HybridClassifier
+            result = HybridClassifier.shared().predict(user_id, description)
+            return {
+                "area": result.area,
+                "confidence": result.confidence,
+                "mode": result.mode,
+                "user_history_size": result.user_history_size,
+            }
+        except Exception as e:
+            logger.warning(
+                f"HybridClassifier no disponible ({type(e).__name__}: {e}); "
+                "cayendo a clasificador legacy de forma permanente para "
+                "este proceso.")
+            _HYBRID_DISABLED = True
+    return {
+        "area": _legacy_classify(description),
+        "confidence": 0.0,
+        "mode": "legacy",
+        "user_history_size": 0,
+    }
+
+
+def _classify_area(user_id: str, description: str) -> list[str]:
+    """Predice el campo Area vía tool REST `/modules/p2/classify-area`.
+
+    Mantiene firma `list[str]` por compatibilidad con el agente y los
+    tests. Si la llamada al tool falla por red/auth, se usa el híbrido
+    in-process (mismo resultado, sin túnel HTTP).
+    """
+    try:
+        areas = registrar_tools.classify_area.invoke({
+            "user_id": user_id, "description": description,
+        })
+        if areas:
+            return list(areas)
+    except Exception as e:
+        logger.warning(f"classify_area tool falló, usando fallback in-process: {e}")
+    return classify_area_full(user_id, description)["area"]
+
+
+def _record_confirmed_transaction(user_id: str, description: str,
+                                  area: list[str]) -> None:
+    """Hook de entrenamiento incremental: actualiza el modelo personal.
+
+    Se invoca tras cualquier alta `accepted` o `confirm_pending`. No
+    propaga errores: si el HybridClassifier no está disponible, la
+    operación es no-op (el alta de transacción no debe romper por un
+    fallo de entrenamiento).
+    """
+    if _HYBRID_DISABLED:
+        return
+    try:
+        from src.agents.registrar.classifier_hybrid import HybridClassifier
+        state = HybridClassifier.shared().record_confirmed(
+            user_id, description, area,
+        )
+        logger.debug(
+            f"PersonalClassifier({user_id[:8]}…): record_confirmed → {state}")
+    except Exception as e:
+        logger.warning(
+            f"record_confirmed_transaction falló para {user_id}: "
+            f"{type(e).__name__}: {e}")
 
 
 # Validación delegada al agente Security
@@ -141,9 +214,10 @@ def _persist(
     *,
     status: str = "accepted",
     anomaly_reasons: Optional[list[str]] = None,
+    extra_metadata: Optional[dict] = None,
 ) -> TransactionRecord:
     """
-    Persiste la transacción con `status` y razones opcionales.
+    Persiste la transacción con `status`, razones y metadata enriquecida (E2).
 
     1. Si la BD está configurada: INSERT en `transactions` y devuelve el record
        con id real generado por la BD.
@@ -155,10 +229,12 @@ def _persist(
         from src.data.schema import Transaction
     except Exception as e:
         logger.warning(f"BD no disponible, persistencia en memoria: {e}")
-        return _persist_in_memory(draft, status=status, anomaly_reasons=reasons)
+        return _persist_in_memory(draft, status=status, anomaly_reasons=reasons,
+                                  extra_metadata=extra_metadata)
 
     if not is_database_configured():
-        return _persist_in_memory(draft, status=status, anomaly_reasons=reasons)
+        return _persist_in_memory(draft, status=status, anomaly_reasons=reasons,
+                                  extra_metadata=extra_metadata)
 
     try:
         with get_session() as session:
@@ -173,6 +249,7 @@ def _persist(
                 source=draft.source,
                 status=status,
                 anomaly_reasons=reasons or None,
+                extra_metadata=extra_metadata or None,
             )
             session.add(row)
             session.flush()  # asigna id y created_at
@@ -185,7 +262,8 @@ def _persist(
             )
     except Exception as e:
         logger.error(f"INSERT falló, fallback a memoria: {e}")
-        return _persist_in_memory(draft, status=status, anomaly_reasons=reasons)
+        return _persist_in_memory(draft, status=status, anomaly_reasons=reasons,
+                                  extra_metadata=extra_metadata)
 
 
 def _persist_in_memory(
@@ -193,8 +271,15 @@ def _persist_in_memory(
     *,
     status: str = "accepted",
     anomaly_reasons: Optional[list[str]] = None,
+    extra_metadata: Optional[dict] = None,
 ) -> TransactionRecord:
-    """Stub: ID generado en memoria, sin tocar BD."""
+    """Stub: ID generado en memoria, sin tocar BD.
+
+    El parámetro `extra_metadata` se acepta para mantener la firma con
+    `_persist`. No se devuelve en el `TransactionRecord` (su contrato
+    expone los campos como `InvoiceMetadata` separado en otros sitios).
+    """
+    del extra_metadata  # consumido por _persist real; ignorado en memoria
     return TransactionRecord(
         **draft.model_dump(),
         id=str(uuid.uuid4()),
@@ -230,12 +315,21 @@ def add_manual_transaction(entry: ManualEntry) -> RegistryResult:
         ])
 
     record = _persist(draft, status="accepted")
+    _record_confirmed_transaction(entry.user_id, entry.description, area)
     return RegistryResult(accepted=[record])
 
 
 def add_from_image(upload: ImageUpload) -> RegistryResult:
-    """Alta desde imagen: OCR → total → construir Draft → validar → persistir."""
-    # 1. OCR
+    """Alta desde imagen con OCR enriquecido (E2).
+
+    Pipeline:
+      1. Decodifica la imagen.
+      2. `EnrichedOCRExtractor.extract_all_from_image` → total + fecha
+         + `InvoiceMetadata` (NIF, comercio, IVA, método de pago).
+      3. Descripción: hint del usuario si llega, si no se genera a
+         partir de comercio + total.
+      4. Validación Security + persistencia (con `extra_metadata`).
+    """
     try:
         image_array = _decode_image(upload.image)
     except Exception as e:
@@ -246,50 +340,65 @@ def add_from_image(upload: ImageUpload) -> RegistryResult:
         )])
 
     try:
-        total = OCRTotalExtractor.shared().extract_total_from_image(image_array)
+        ocr_result = EnrichedOCRExtractor.shared().extract_all_from_image(image_array)
     except Exception as e:
-        logger.exception(f"OCR falló: {e}")
-        return RegistryResult(rejected=[RejectedItem(
-            reason=f"OCR falló: {type(e).__name__}",
-            raw_input={"hint": upload.description_hint or ""},
-        )])
+        logger.exception(f"OCR enriquecido falló: {e}")
+        # Fallback al motor legacy: garantiza que un OCR fallido no
+        # rompe el alta si al menos el total es extraíble.
+        try:
+            total = OCRTotalExtractor.shared().extract_total_from_image(image_array)
+            ocr_result = {"total": total, "date": None,
+                          "metadata": InvoiceMetadata()}
+        except Exception:
+            return RegistryResult(rejected=[RejectedItem(
+                reason=f"OCR falló: {type(e).__name__}",
+                raw_input={"hint": upload.description_hint or ""},
+            )])
 
+    total = ocr_result["total"]
     if total is None:
         return RegistryResult(rejected=[RejectedItem(
             reason="No se pudo extraer un total de la imagen",
             raw_input={"hint": upload.description_hint or ""},
         )])
 
-    # 2. Construcción del draft
-    description = upload.description_hint or "Compra (extraída de imagen)"
+    md: InvoiceMetadata = ocr_result.get("metadata") or InvoiceMetadata()
+    description = generate_description(md.merchant, total, upload.description_hint)
     area = _classify_area(upload.user_id, description)
+    tx_date = (upload.date_hint or ocr_result.get("date")
+               or datetime.now(timezone.utc).date())
     draft = TransactionDraft(
         user_id=upload.user_id,
         description=description,
-        date=upload.date_hint or datetime.now(timezone.utc).date(),
+        date=tx_date,
         amount=Decimal(str(round(total, 2))),
         area=area,
         type="Expenses",
         source="ocr",
     )
 
-    # 3. Validación + persistencia
+    extra_meta = md.model_dump(mode="json", exclude_none=True) if md else None
+
     ok, reasons = _security_validate(draft)
     if not ok:
-        record = _persist(draft, status="pending", anomaly_reasons=reasons)
+        record = _persist(draft, status="pending", anomaly_reasons=reasons,
+                          extra_metadata=extra_meta)
         return RegistryResult(pending_review=[
             ReviewItem(record=record, anomaly_reasons=reasons),
         ])
 
-    record = _persist(draft, status="accepted")
+    record = _persist(draft, status="accepted", extra_metadata=extra_meta)
+    _record_confirmed_transaction(upload.user_id, description, area)
     return RegistryResult(accepted=[record])
 
 
 def extract_from_image(upload: ImageUpload) -> OCRExtractResult:
     """
-    OCR-only: extrae el total de la imagen y sugiere descripción/área/fecha,
-    pero NO persiste. La UI muestra los valores al usuario, este los confirma
-    o edita, y luego se crea la transacción vía `add_manual_transaction`.
+    OCR-only enriquecido (E2): extrae total + fecha + metadatos (NIF,
+    comercio, IVA, método de pago) y sugiere descripción/área, pero
+    NO persiste. La UI muestra los campos al usuario, este los
+    confirma/edita y luego se crea la transacción vía
+    `add_manual_transaction`.
     """
     try:
         image_array = _decode_image(upload.image)
@@ -298,23 +407,28 @@ def extract_from_image(upload: ImageUpload) -> OCRExtractResult:
         return OCRExtractResult(reason="Imagen inválida o corrupta")
 
     try:
-        total = OCRTotalExtractor.shared().extract_total_from_image(image_array)
+        ocr_result = EnrichedOCRExtractor.shared().extract_all_from_image(image_array)
     except Exception as e:
-        logger.exception(f"OCR falló: {e}")
+        logger.exception(f"OCR enriquecido falló: {e}")
         return OCRExtractResult(reason=f"OCR falló: {type(e).__name__}")
 
+    total = ocr_result["total"]
     if total is None:
         return OCRExtractResult(
             reason="No se pudo extraer un total de la imagen",
         )
 
-    description = upload.description_hint or "Compra (extraída de imagen)"
+    md: InvoiceMetadata = ocr_result.get("metadata") or InvoiceMetadata()
+    description = generate_description(md.merchant, total, upload.description_hint)
+    tx_date = (upload.date_hint or ocr_result.get("date")
+               or datetime.now(timezone.utc).date())
     extracted = ExtractedTransaction(
         amount=Decimal(str(round(total, 2))),
         description_suggested=description,
-        date_suggested=upload.date_hint or datetime.now(timezone.utc).date(),
+        date_suggested=tx_date,
         area_suggested=_classify_area(upload.user_id, description),
         type_suggested="Expenses",
+        metadata=md,
     )
     return OCRExtractResult(extracted=extracted)
 
@@ -381,11 +495,15 @@ def list_pending_reviews(user_id: str) -> RegistryResult:
 def confirm_pending(user_id: str, transaction_id: str) -> RegistryResult:
     """
     El usuario aprueba una transacción pendiente: status='pending' → 'accepted'.
-    A partir de ese momento contabiliza en analytics.
+    A partir de ese momento contabiliza en analytics y se usa como muestra
+    de entrenamiento para el `PersonalClassifier` del usuario (E1).
     """
     record_or_error = _update_pending_status(user_id, transaction_id, "accepted")
     if isinstance(record_or_error, str):
         return RegistryResult(rejected=[RejectedItem(reason=record_or_error)])
+    _record_confirmed_transaction(
+        user_id, record_or_error.description, record_or_error.area,
+    )
     return RegistryResult(accepted=[record_or_error])
 
 

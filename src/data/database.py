@@ -113,6 +113,8 @@ _PENDING_MIGRATIONS: dict[str, dict[str, str]] = {
     "transactions": {
         "status": "VARCHAR(16) NOT NULL DEFAULT 'accepted'",
         "anomaly_reasons": "JSON",
+        # E2: campos enriquecidos extraídos por OCR (NIF, comercio, IVA…)
+        "extra_metadata": "JSON",
     },
     "users": {
         # role para Fase 3: 'basic' default, 'advanced' por opt-in en /settings.

@@ -39,6 +39,7 @@ Cada usuario accede mediante login (email + passphrase) y verificación biométr
 | 7 | Detección de intención semántica | Router LLM con structured-output (`OrchestratorDecision`); 6 acciones posibles |
 | 8 | Langfuse | Trazas por turno con `session_id`/`user_id`/`agent`/`action`; degrada elegante sin claves |
 | 9 | Prompts ASPECCT | Router/Narrator/Conversational/Summary con cabeceras `[A][S][P][E][C][C][T]` (ver `doc/prompts_aspect.md`) |
+| 10 | Tres evoluciones incrementales (P2, P3, P5) | Plan detallado con métricas pre/post y criterios de aceptación en `doc/evoluciones.md` |
 
 ## Reutilización de prácticas anteriores
 

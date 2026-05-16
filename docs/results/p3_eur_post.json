@@ -1,0 +1,43 @@
+{
+  "mode": "post",
+  "set": "eur",
+  "engine": "eur",
+  "dataset_path": "C:\\Users\\diego\\OneDrive - Universidad Rey Juan Carlos\\Documentos\\GIA_URJC\\Curso 2025-26\\Ap_IA\\practicas\\PFINAL_AP-IA\\data\\eval\\eur_invoices\\test.jsonl",
+  "model_used": "models/ocr_total_extractor_eur.joblib",
+  "n_total": 30,
+  "n_valid": 30,
+  "counts": {
+    "hit": 30,
+    "miss": 0,
+    "no_pred": 0,
+    "bad_label": 0
+  },
+  "accuracy": 1.0,
+  "latency": {
+    "p50_ms": 6.000649998895824,
+    "p95_ms": 8.732610018341802,
+    "mean_ms": 6.257843331938299
+  },
+  "error_examples": [],
+  "field_coverage": {
+    "fecha": {
+      "present_in_gt": 30,
+      "extracted": 30,
+      "correct": 30
+    },
+    "nif": {
+      "present_in_gt": 30,
+      "extracted": 30,
+      "correct": 30
+    },
+    "comercio": {
+      "present_in_gt": 30,
+      "extracted": 30,
+      "correct": 30
+    },
+    "iva": {
+      "present_in_gt": 30,
+      "extracted": 19
+    }
+  }
+}

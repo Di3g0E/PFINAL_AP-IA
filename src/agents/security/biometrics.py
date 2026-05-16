@@ -34,6 +34,10 @@ class FaceFeatures:
     liveness_score: float       # ∈ [0, 1] — probabilidad de ser rostro real
     is_live: bool               # liveness_score >= LIVENESS_THRESHOLD
     face_confidence: float      # confianza del detector MTCNN
+    antispoof_score: float = 1.0  # E3 Fase 2: ∈ [0,1], 1=real. Default alto
+                                  # para no bloquear si el módulo está desactivado.
+    challenge_passed: bool = True # E3 Fase 3: True si parpadea en vídeo. Default True
+                                  # si es imagen única o el flag está desactivado.
 
 
 # Constantes operativas — defaults sensatos. En runtime se leen de
@@ -224,12 +228,15 @@ class BiometricPipeline:
         liveness_score = self._liveness(aligned_bgr)
         embedding = self._embed(aligned_bgr)
 
-        # El umbral se lee de settings en cada llamada para que cambios en
-        # .env (vía LIVENESS_THRESHOLD=...) tomen efecto sin reiniciar el
-        # singleton. Fallback a la constante si settings no está disponible.
+        # E3 Fase 2: Anti-spoofing por textura (si está habilitado)
+        antispoof = 1.0  # Default: no bloquear
         try:
             from src.utils.config import settings
             threshold = settings.liveness_threshold
+            if getattr(settings, "security_antispoof_enabled", False):
+                from src.agents.security.antispoof import compute_antispoof_score
+                antispoof = compute_antispoof_score(aligned_bgr)
+                logger.debug(f"antispoof score (single frame): {antispoof:.3f}")
         except Exception:
             threshold = LIVENESS_THRESHOLD
 
@@ -238,6 +245,100 @@ class BiometricPipeline:
             liveness_score=liveness_score,
             is_live=liveness_score >= threshold,
             face_confidence=confidence,
+            antispoof_score=antispoof,
+        )
+
+    def extract_from_video(
+        self,
+        video_bytes: bytes,
+        n_frames: int = 10,
+    ) -> FaceFeatures:
+        """Pipeline E3-Fase1: extrae features desde vídeo con voto promedio.
+
+        1. Decodifica el vídeo (WebM/MP4) a frames OpenCV vía fichero temporal.
+        2. Muestrea ``n_frames`` equiespaciados del total de frames.
+        3. Para cada frame: detección + alineación + embedding + liveness.
+           Los frames sin cara se descartan en silencio.
+        4. Promedia embeddings (L2-normalizado) y liveness scores.
+        5. Devuelve ``FaceFeatures`` con el embedding y score promediados.
+
+        Raises:
+            ValueError: si el vídeo no se pudo abrir, no tiene frames, o
+                        ningún frame contiene una cara detectable.
+        """
+        frames_bgr = decode_video_bytes(video_bytes, n_frames=n_frames)
+        if not frames_bgr:
+            raise ValueError("El vídeo no contiene frames decodificables.")
+
+        embeddings: list[np.ndarray] = []
+        liveness_scores: list[float] = []
+        confidences: list[float] = []
+        aligned_faces: list[np.ndarray] = []  # Para anti-spoofing batch
+
+        for frame in frames_bgr:
+            det = self._detect_and_align(frame)
+            if det is None:
+                continue
+            aligned_bgr, confidence = det
+            embeddings.append(self._embed(aligned_bgr))
+            liveness_scores.append(self._liveness(aligned_bgr))
+            confidences.append(confidence)
+            aligned_faces.append(aligned_bgr)
+
+        if not embeddings:
+            raise ValueError(
+                f"No se detectó rostro en ninguno de los {len(frames_bgr)} "
+                "frames muestreados del vídeo."
+            )
+
+        logger.info(
+            f"extract_from_video: {len(embeddings)}/{len(frames_bgr)} frames "
+            f"con cara detectada"
+        )
+
+        # Promedio L2-normalizado de embeddings
+        avg_emb = np.mean(np.stack(embeddings), axis=0).astype(np.float32)
+        norm = np.linalg.norm(avg_emb)
+        if norm > 0:
+            avg_emb /= norm
+
+        avg_liveness = float(np.mean(liveness_scores))
+        avg_confidence = float(np.mean(confidences))
+
+        # E3 Fase 2: Anti-spoofing batch (mediana de scores por frame)
+        antispoof = 1.0
+        challenge_passed = True
+        try:
+            from src.utils.config import settings
+            threshold = settings.liveness_threshold
+            
+            # Fase 2: Antispoof
+            if getattr(settings, "security_antispoof_enabled", False):
+                from src.agents.security.antispoof import (
+                    compute_antispoof_scores_batch,
+                )
+                antispoof, per_frame = compute_antispoof_scores_batch(aligned_faces)
+                logger.info(
+                    f"antispoof video: median={antispoof:.3f}, "
+                    f"per_frame={[f'{s:.2f}' for s in per_frame]}"
+                )
+                
+            # Fase 3: Parpadeo
+            if getattr(settings, "security_challenges_enabled", False):
+                from src.agents.security.challenges import verify_blink_from_video
+                challenge_passed = verify_blink_from_video(frames_bgr)
+                logger.info(f"challenge_passed (blink): {challenge_passed}")
+        except Exception as e:
+            logger.warning(f"Error procesando módulos E3 (Fase 2/3): {e}")
+            threshold = LIVENESS_THRESHOLD
+
+        return FaceFeatures(
+            embedding=avg_emb,
+            liveness_score=avg_liveness,
+            is_live=avg_liveness >= threshold,
+            face_confidence=avg_confidence,
+            antispoof_score=antispoof,
+            challenge_passed=challenge_passed,
         )
 
     @staticmethod
@@ -253,3 +354,78 @@ def decode_image_bytes(image_bytes: bytes) -> np.ndarray:
     if img is None:
         raise ValueError("La imagen no se pudo decodificar (bytes inválidos).")
     return img
+
+
+def decode_video_bytes(
+    video_bytes: bytes,
+    n_frames: int = 10,
+) -> list[np.ndarray]:
+    """Video bytes (WebM/MP4) → lista de N frames BGR equiespaciados.
+
+    Usa un fichero temporal porque ``cv2.VideoCapture`` no soporta lectura
+    desde un buffer de memoria. El fichero se elimina automáticamente.
+
+    Args:
+        video_bytes: Contenido binario del vídeo.
+        n_frames: Número máximo de frames a muestrear.
+
+    Returns:
+        Lista de arrays BGR (puede ser vacía si el vídeo no es válido).
+    """
+    import tempfile
+    import os
+
+    if not video_bytes:
+        return []
+
+    # Escribir a fichero temporal — usamos delete=False + unlink manual
+    # porque en Windows no se puede abrir un fichero abierto por otro handle.
+    tmp_path = None
+    try:
+        fd, tmp_path = tempfile.mkstemp(suffix=".webm")
+        os.write(fd, video_bytes)
+        os.close(fd)
+
+        cap = cv2.VideoCapture(tmp_path)
+        if not cap.isOpened():
+            logger.warning("decode_video_bytes: VideoCapture no pudo abrir el fichero")
+            return []
+
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        if total_frames <= 0:
+            # Fallback: leer hasta que no haya más frames
+            frames_all = []
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                frames_all.append(frame)
+            cap.release()
+            total_frames = len(frames_all)
+            if total_frames == 0:
+                return []
+            indices = np.linspace(0, total_frames - 1, min(n_frames, total_frames),
+                                   dtype=int)
+            return [frames_all[i] for i in indices]
+
+        # Muestrear N frames equiespaciados
+        indices = np.linspace(0, total_frames - 1, min(n_frames, total_frames),
+                               dtype=int)
+        frames = []
+        for idx in indices:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, int(idx))
+            ret, frame = cap.read()
+            if ret and frame is not None:
+                frames.append(frame)
+        cap.release()
+        return frames
+
+    except Exception as e:
+        logger.warning(f"decode_video_bytes falló: {e}")
+        return []
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass

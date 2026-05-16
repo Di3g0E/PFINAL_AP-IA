@@ -128,6 +128,10 @@ class Transaction(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="accepted")
     # Razones de anomalía (cuando status='pending') — JSON list de strings.
     anomaly_reasons: Mapped[Optional[list]] = mapped_column(JSON)
+    # Campos enriquecidos extraídos por OCR (E2): NIF, comercio, IVA,
+    # método de pago, etc. Se guarda como dict serializable (JSON
+    # portable: JSONB en Postgres, TEXT en SQLite).
+    extra_metadata: Mapped[Optional[dict]] = mapped_column(JSON)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),
                                                  server_default=func.now())

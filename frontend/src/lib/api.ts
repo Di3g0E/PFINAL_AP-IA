@@ -182,17 +182,27 @@ export async function register(
 export async function login(
   email: string,
   passphrase: string,
-  face?: Blob,  // Opcional - desactivado temporalmente
+  face?: Blob,  // JPEG (single-frame) o WebM (vídeo E3)
 ): Promise<TokenResponse> {
   const fd = new FormData();
   fd.append("email", email);
   fd.append("passphrase", passphrase);
   
-  // BIOMETRÍA DESACTIVADA TEMPORALMENTE
   if (face) {
-    fd.append("face", face, "face.jpg");
+    // Detectar si es vídeo (WebM) o imagen (JPEG/PNG)
+    const isVideo = face.type.startsWith("video/");
+    if (isVideo) {
+      // E3 Fase 1: enviar como face_video (el backend lo procesa con
+      // extract_from_video → voto promedio de N frames)
+      fd.append("face_video", face, "face.webm");
+      // Fallback face obligatorio: el endpoint sigue requiriendo 'face'.
+      // Creamos un placeholder JPEG de 1x1 px transparente.
+      const placeholderJpeg = _createPlaceholderJpeg();
+      fd.append("face", placeholderJpeg, "face.jpg");
+    } else {
+      fd.append("face", face, "face.jpg");
+    }
   }
-  // Si no hay face, no lo añadimos - el backend lo manejará como opcional
   
   const res = await fetch(`${API_BASE}/auth/login`, {
     method: "POST",
@@ -201,6 +211,29 @@ export async function login(
   });
   if (!res.ok) throw new Error(await parseError(res));
   return res.json();
+}
+
+/**
+ * Genera un Blob JPEG mínimo (1x1 px) para satisfacer el campo 'face'
+ * obligatorio del endpoint cuando se envía vídeo como entrada principal.
+ */
+function _createPlaceholderJpeg(): Blob {
+  // JPEG mínimo válido: 1x1 pixel negro (267 bytes)
+  const canvas = document.createElement("canvas");
+  canvas.width = 1;
+  canvas.height = 1;
+  const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, 1, 1);
+  // toBlob es async, usamos toDataURL como workaround síncrono
+  const dataUrl = canvas.toDataURL("image/jpeg", 0.1);
+  const byteString = atob(dataUrl.split(",")[1]);
+  const ab = new ArrayBuffer(byteString.length);
+  const ia = new Uint8Array(ab);
+  for (let i = 0; i < byteString.length; i++) {
+    ia[i] = byteString.charCodeAt(i);
+  }
+  return new Blob([ab], { type: "image/jpeg" });
 }
 
 // Chat

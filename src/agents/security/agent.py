@@ -405,9 +405,24 @@ def login_user(request: LoginRequest) -> SecurityVerdict:
     # Fallback al constante si settings no se puede importar.
     sim_threshold = getattr(settings, "face_similarity_threshold", SIMILARITY_THRESHOLD)
 
+    # E3 Fase 1: si hay vídeo y el feature flag está activo, usa el pipeline
+    # de voto promedio de N frames. Si no, single-frame legacy.
+    use_video = (
+        request.face_video is not None
+        and len(request.face_video) > 0
+        and getattr(settings, "security_video_enabled", False)
+    )
+    n_frames = getattr(settings, "security_video_n_frames", 10)
+
     try:
-        image = decode_image_bytes(request.face_image)
-        features = BiometricPipeline.shared().extract(image)
+        if use_video:
+            logger.info(f"login_user: modo vídeo (n_frames={n_frames})")
+            features = BiometricPipeline.shared().extract_from_video(
+                request.face_video, n_frames=n_frames,
+            )
+        else:
+            image = decode_image_bytes(request.face_image)
+            features = BiometricPipeline.shared().extract(image)
     except ValueError as e:
         _ACCESS_CONTROLLER.record_failure(user_id)
         return SecurityVerdict(decision="deny", user_id=user_id, reason=str(e))
@@ -423,6 +438,35 @@ def login_user(request: LoginRequest) -> SecurityVerdict:
         return SecurityVerdict(
             decision="deny", user_id=user_id,
             reason="Liveness insuficiente: posible ataque de presentación.",
+            liveness_score=features.liveness_score,
+        )
+
+    # 4b. Anti-spoofing (E3 Fase 2)
+    antispoof_threshold = getattr(settings, "security_antispoof_threshold", 0.55)
+    if (getattr(settings, "security_antispoof_enabled", False)
+            and features.antispoof_score < antispoof_threshold):
+        _ACCESS_CONTROLLER.record_failure(user_id)
+        logger.warning(
+            f"login_user: anti-spoofing bloqueó el login "
+            f"(score={features.antispoof_score:.3f} < threshold={antispoof_threshold})"
+        )
+        _maybe_notify_login(user_id, success=False, reason="antispoof",
+                            liveness=features.liveness_score)
+        return SecurityVerdict(
+            decision="deny", user_id=user_id,
+            reason="Anti-spoofing: la imagen no parece un rostro real.",
+            liveness_score=features.liveness_score,
+        )
+
+    # 4c. Challenge-response (E3 Fase 3)
+    if getattr(settings, "security_challenges_enabled", False) and not features.challenge_passed:
+        _ACCESS_CONTROLLER.record_failure(user_id)
+        logger.warning(f"login_user: challenge_response bloqueó el login (no parpadeo detectado)")
+        _maybe_notify_login(user_id, success=False, reason="challenge",
+                            liveness=features.liveness_score)
+        return SecurityVerdict(
+            decision="deny", user_id=user_id,
+            reason="Challenge fallido: No se detectó parpadeo en el vídeo.",
             liveness_score=features.liveness_score,
         )
 

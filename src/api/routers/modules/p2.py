@@ -1,8 +1,12 @@
 """
 P2 — Clasificación de categoría (Area) por descripción.
 
-Expone como microservicio el `FinancialClassifier` (SGDClassifier + char
-n-grams) entrenado en P2 y cargado por `src/agents/registrar/agent.py`.
+Tras la evolución E1, expone el `HybridClassifier` (zero-shot por
+similitud con centroides de clase para usuarios nuevos + SGDClassifier
+personal incremental sobre embeddings de transformer para usuarios con
+historia). El clasificador legacy `FinancialClassifier` (TF-IDF char
+n-grams + SGDClassifier global) se mantiene como fallback si el
+transformer no está disponible.
 
 Endpoints:
   - POST /modules/p2/classify-area
@@ -34,6 +38,23 @@ class ClassifyResponse(BaseModel):
                      "como 'cine y restaurante' puede devolver ['Leisure', "
                      "'Restauración']. ['Other'] si no hay modelo cargado."),
     )
+    confidence: float = Field(
+        default=0.0, ge=0.0, le=1.0,
+        description="Confianza ∈ [0, 1] de la predicción top-1.",
+    )
+    mode: str = Field(
+        default="legacy",
+        description=("Modo del clasificador que produjo la predicción: "
+                     "'zero_shot' (usuario cold-start, vía transformer + "
+                     "centroides), 'personal' (modelo SGD entrenado con "
+                     "historial del usuario), o 'legacy' (fallback al modelo "
+                     "global TF-IDF si el transformer no está disponible)."),
+    )
+    user_history_size: int = Field(
+        default=0,
+        description="Número de transacciones confirmadas del usuario vistas "
+                    "por el clasificador personal (informativo).",
+    )
 
 
 @router.post(
@@ -43,12 +64,10 @@ class ClassifyResponse(BaseModel):
 )
 def classify_area(
     body: ClassifyRequest,
-    _user_id: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_current_user_id),
 ) -> ClassifyResponse:
     try:
-        # `_classify_area` ya gestiona el caso de modelo no disponible
-        # devolviendo ['Other'], así que no propaga excepciones triviales.
-        area = registrar._classify_area(body.description)
+        result = registrar.classify_area_full(user_id, body.description)
     except Exception as e:
         logger.exception(f"P2.classify_area falló: {e}")
         raise HTTPException(
@@ -56,4 +75,10 @@ def classify_area(
             f"Error clasificando: {type(e).__name__}",
         ) from e
 
-    return ClassifyResponse(description=body.description, area=area)
+    return ClassifyResponse(
+        description=body.description,
+        area=result["area"],
+        confidence=result["confidence"],
+        mode=result["mode"],
+        user_history_size=result["user_history_size"],
+    )

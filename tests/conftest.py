@@ -10,12 +10,21 @@ in-process correspondientes (lo que harían los routers REST si uvicorn
 estuviera arriba). De esta forma los tests existentes siguen verificando
 la lógica de los módulos sin necesidad de un servidor HTTP — mismo
 contrato, distinto transporte.
+
+E1 — HybridClassifier (transformer + SGD personal): para que los tests
+no necesiten descargar `sentence-transformers` (~120 MB), inyectamos un
+`FakeEmbedder` determinista. Esto valida la lógica de orquestación
+(zero-shot vs personal, bootstrap, partial_fit, persistencia) sin
+modelo real. Tests dedicados (test_classifier_hybrid.py) verifican la
+calidad semántica con el modelo real cuando está disponible.
 """
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
+import numpy as np
 import pytest
 
 
@@ -45,10 +54,10 @@ def _dispatch_post(path: str, user_id: str, body: dict[str, Any]) -> Any:
         )
         return report.model_dump(mode="json")
 
-    # P2 — clasificador
+    # P2 — clasificador (E1: HybridClassifier con metadatos)
     if path == "/modules/p2/classify-area":
-        area = registrar._classify_area(user_id, body["description"])
-        return {"description": body["description"], "area": area}
+        result = registrar.classify_area_full(user_id, body["description"])
+        return {"description": body["description"], **result}
 
     # P4 — analytics
     if path == "/modules/p4/monthly-summary":
@@ -129,3 +138,79 @@ def _stub_http_client_with_inprocess(monkeypatch):
     monkeypatch.setattr(http_client, "post", _dispatch_post)
     monkeypatch.setattr(http_client, "get", _dispatch_get)
     monkeypatch.setattr(http_client, "delete", _dispatch_delete)
+
+
+# E1 — Fake embedder determinista para tests sin descargar el transformer real
+
+
+class FakeEmbedder:
+    """Embedder determinista: hash de cada token → vector L2-normalizado.
+
+    Suficiente para validar la lógica del HybridClassifier (orquestación,
+    persistencia, partial_fit, bootstrap) sin necesidad de descargar
+    el modelo de sentence-transformers. NO mide calidad semántica.
+
+    Estrategia: para cada texto, sumamos vectores deterministas obtenidos
+    de los tokens (token hash → posición en el espacio). Textos
+    "similares" comparten tokens → vectores parecidos. La firma `encode`
+    coincide con la del backend real.
+    """
+
+    DIM = 384
+
+    def __init__(self, seed: int = 0):
+        self._seed = seed
+
+    def _token_vec(self, token: str) -> np.ndarray:
+        h = hashlib.sha256(f"{self._seed}:{token}".encode()).digest()
+        # Construye un vector de DIM bytes partiendo del hash repetido
+        raw = (h * (self.DIM // len(h) + 1))[: self.DIM]
+        vec = np.frombuffer(raw, dtype=np.uint8).astype(np.float32)
+        return vec - 127.5  # centra alrededor de 0
+
+    def encode(self, texts, normalize_embeddings: bool = True) -> np.ndarray:
+        out = np.zeros((len(texts), self.DIM), dtype=np.float32)
+        for i, text in enumerate(texts):
+            tokens = (text or "").lower().split()
+            if not tokens:
+                out[i] = np.ones(self.DIM, dtype=np.float32) / self.DIM ** 0.5
+                continue
+            vec = sum(self._token_vec(t) for t in tokens) / len(tokens)
+            if normalize_embeddings:
+                norm = np.linalg.norm(vec)
+                if norm > 0:
+                    vec = vec / norm
+            out[i] = vec
+        return out
+
+
+@pytest.fixture(autouse=True)
+def _inject_fake_embedder_for_e1(tmp_path, monkeypatch):
+    """Inyecta el embedder fake y aísla la persistencia de modelos personales.
+
+    Cada test recibe:
+      - TransformerEmbedder.shared() → FakeEmbedder (no descarga nada)
+      - models/personal/ apuntando a tmp_path/personal/ (no contamina disco)
+      - HybridClassifier + Registry reseteados (sin caché entre tests)
+    """
+    from src.agents.registrar import classifier_personal
+    from src.agents.registrar.classifier_hybrid import HybridClassifier
+    from src.agents.registrar.classifier_personal import PersonalClassifierRegistry
+    from src.agents.registrar.embedder import TransformerEmbedder
+
+    TransformerEmbedder.reset()
+    TransformerEmbedder.set_for_tests(FakeEmbedder())
+
+    personal_dir = tmp_path / "personal"
+    personal_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(classifier_personal, "PERSONAL_DIR", personal_dir)
+
+    PersonalClassifierRegistry.reset()
+    HybridClassifier.reset()
+    # Restablece la bandera `_HYBRID_DISABLED` del registrar entre tests
+    from src.agents.registrar import agent as _reg_agent
+    _reg_agent._HYBRID_DISABLED = False
+    yield
+    TransformerEmbedder.reset()
+    PersonalClassifierRegistry.reset()
+    HybridClassifier.reset()

@@ -80,21 +80,36 @@ async def register(
 @router.post(
     "/login",
     response_model=TokenResponse,
-    summary="Login con passphrase + biometría",
+    summary="Login con passphrase + biometría (foto o vídeo)",
 )
 async def login(
     email: str = Form(...),
     passphrase: str = Form(...),
-    face: UploadFile = File(...),
+    face: UploadFile = File(..., description="Imagen facial (JPEG/PNG)"),
+    face_video: Optional[UploadFile] = File(
+        None,
+        description=(
+            "Vídeo facial (WebM/MP4, 3-5s). Si presente y "
+            "SECURITY_VIDEO_ENABLED=True, se usa en lugar de 'face' "
+            "para extraer embeddings promediados de múltiples frames (E3)."
+        ),
+    ),
 ) -> TokenResponse:
     image_bytes = await face.read()
     if not image_bytes:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Imagen vacía")
 
+    video_bytes: Optional[bytes] = None
+    if face_video is not None:
+        video_bytes = await face_video.read()
+        if not video_bytes:
+            video_bytes = None  # Tratar como si no se hubiera enviado
+
     req = LoginRequest(
         email=email,
         passphrase=passphrase,
         face_image=image_bytes,
+        face_video=video_bytes,
     )
     verdict = security.login_user(req)
     if verdict.decision != "allow" or not verdict.user_id:

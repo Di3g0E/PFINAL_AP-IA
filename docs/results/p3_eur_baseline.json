@@ -1,0 +1,72 @@
+{
+  "mode": "baseline",
+  "set": "eur",
+  "dataset_path": "C:\\Users\\diego\\OneDrive - Universidad Rey Juan Carlos\\Documentos\\GIA_URJC\\Curso 2025-26\\Ap_IA\\practicas\\PFINAL_AP-IA\\data\\eval\\eur_invoices\\test.jsonl",
+  "model_used": "models/ocr_total_extractor.joblib",
+  "n_total": 30,
+  "n_valid": 30,
+  "counts": {
+    "hit": 2,
+    "miss": 28,
+    "no_pred": 0,
+    "bad_label": 0
+  },
+  "accuracy": 0.06666666666666667,
+  "latency": {
+    "p50_ms": 5.606200007605366,
+    "p95_ms": 8.880915008194279,
+    "mean_ms": 5.8069400052772835
+  },
+  "error_examples": [
+    {
+      "text_snippet": "CARREFOUR NIF: B85329037 Fecha: 01/12/2025 3x Aceite de oliva 1L 8,51 25,53 1x Queso curado 250g 5,27 5,27 1x Zapatillas",
+      "target": 82.32,
+      "pred": 25.53
+    },
+    {
+      "text_snippet": "Cafetería Madrid NIF: B72043515 Fecha: 03-04-2024 1x Cargador móvil 12,97 12,97 3x Pantalón vaquero 25,21 75,63 3x Cerve",
+      "target": 128.03,
+      "pred": 25.21
+    },
+    {
+      "text_snippet": "Zara Home NIF: B29175900 Fecha: 08/11/2025 1x Leche entera 1L 0,95 0,95 2x Café con leche 2,64 5,28 1x Auriculares Bluet",
+      "target": 37.27,
+      "pred": 6.47
+    },
+    {
+      "text_snippet": "Zara Home NIF: B82070937 Fecha: 18-05-2026 1x Auriculares Bluetooth 49,01 49,01 1x Cerveza tercio 2,23 2,23 1x Refresco ",
+      "target": 198.14,
+      "pred": 18.01
+    },
+    {
+      "text_snippet": "Restaurante El Buen Sabor NIF: B80823176 Fecha: 02/04/2026 2x Combustible 30L 51,49 102,98 1x Yogur natural pack 4 2,49 ",
+      "target": 116.02,
+      "pred": 102.98
+    },
+    {
+      "text_snippet": "Pizzeria La Tagliatella NIF: B47376585 Fecha: 18/12/2026 1x Hamburguesa con queso 9,12 9,12 1x Auriculares Bluetooth 15,",
+      "target": 91.95,
+      "pred": 15.96
+    },
+    {
+      "text_snippet": "Zara Home NIF: B64038913 Fecha: 05-12-2026 1x Combustible 30L 41,45 41,45 2x Cable USB-C 8,19 16,38 2x Papel higiénico 5",
+      "target": 82.9,
+      "pred": 41.45
+    },
+    {
+      "text_snippet": "Restaurante El Buen Sabor NIF: B41726318 Fecha: 07-04-2026 2x Cable USB-C 7,25 14,50 1x Detergente líquido 8,10 8,10 2x ",
+      "target": 42.44,
+      "pred": 14.5
+    },
+    {
+      "text_snippet": "Farmacia Central NIF: B52091325 Fecha: 07/07/2024 2x Pan integral 2,11 4,22 3x Auriculares Bluetooth 59,79 179,37 2x Piz",
+      "target": 283.91,
+      "pred": 49.27
+    },
+    {
+      "text_snippet": "Farmacia Central NIF: B45650176 Fecha: 17/09/2024 1x Yogur natural pack 4 2,91 2,91 2x Detergente líquido 6,72 13,44 2x ",
+      "target": 201.92,
+      "pred": 2.91
+    }
+  ]
+}

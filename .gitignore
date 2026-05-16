@@ -35,6 +35,7 @@ data/*.db
 data/*.db-journal
 data/*.sqlite
 data/*.sqlite3
+data/
 
 # IDE y sistema operativo
 .vscode/
