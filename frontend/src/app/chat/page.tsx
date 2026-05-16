@@ -446,14 +446,15 @@ export default function ChatPage() {
             <CardTitle className="text-lg">Conversación</CardTitle>
           </CardHeader>
           
-          <CardContent className="flex-1 flex flex-col">
+          <CardContent className="flex-1 flex flex-col min-h-0">
             <div
               ref={scrollRef}
-              // `min-h-0` es CRÍTICO aquí: por defecto los items flex tienen
-              // `min-height: auto` que ignora el `flex-1` cuando el contenido
-              // crece (charts grandes), haciendo que el contenedor reviente
-              // hacia abajo y el input quede tapado. Con min-h-0 el scroll
-              // interno se activa correctamente y el input se queda fijo.
+              // `min-h-0` aquí Y en el CardContent padre: el quirk de flexbox
+              // (min-height: auto en flex children) se propaga por TODA la
+              // cadena de flex-1. Si solo se pone en el más interno, el padre
+              // sigue creciendo y arrastra todo. Hay que ponerlo en CADA
+              // ancestro flex-1 hasta el contenedor con altura fija (el Card
+              // con h-[600px]).
               className="flex-1 min-h-0 overflow-y-auto space-y-4 pr-2"
             >
               {turns.length === 0 ? (
