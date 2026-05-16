@@ -161,60 +161,29 @@ export function OCRConfirmModal({
             </div>
           </div>
 
-          <div className="space-y-2">
+          <div className="space-y-1">
             <label className="text-sm font-medium text-slate-700">Categoría (Área)</label>
-
-            {suggestedCategories.length > 0 && (
-              <div className="flex flex-wrap gap-1">
-                {suggestedCategories.map((c) => {
-                  const active = areaText
-                    .split(",")
-                    .map((s) => s.trim().toLowerCase())
-                    .includes(c.name.toLowerCase());
-                  return (
-                    <button
-                      key={c.name}
-                      type="button"
-                      onClick={() => setAreaText(c.name)}
-                      disabled={submitting}
-                      className={`px-2 py-0.5 rounded-full text-xs font-medium border transition-colors ${
-                        active
-                          ? "bg-blue-600 text-white border-blue-600"
-                          : "bg-white text-slate-700 border-slate-300 hover:bg-slate-50"
-                      }`}
-                      title={c.count > 0 ? `${c.count} usos previos` : "Sugerida"}
-                    >
-                      {c.name}
-                      {c.count > 0 && (
-                        <span className="ml-1 opacity-70">({c.count})</span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-
-            <input
-              type="text"
-              list="ocr-category-suggestions"
+            <select
               value={areaText}
               onChange={(e) => setAreaText(e.target.value)}
               disabled={submitting}
-              className="flex h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent disabled:cursor-not-allowed disabled:opacity-50"
-              placeholder={
-                suggestedCategories[0]?.name
-                  ? `Ej. ${suggestedCategories[0].name}…`
-                  : "Escribe una categoría…"
-              }
-            />
-            <datalist id="ocr-category-suggestions">
+              className="flex h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <option value="">— Inferir automáticamente —</option>
+              {/* Si el OCR sugirió una categoría que no está en las del
+                  usuario (p. ej. una nueva), la incluimos al principio
+                  como opción seleccionable para no perder la sugerencia. */}
+              {areaText && !suggestedCategories.some((c) => c.name === areaText) && (
+                <option value={areaText}>{areaText} (sugerida por OCR)</option>
+              )}
               {suggestedCategories.map((c) => (
-                <option key={c.name} value={c.name} />
+                <option key={c.name} value={c.name}>
+                  {c.name}{c.count > 0 ? ` (${c.count})` : ""}
+                </option>
               ))}
-            </datalist>
+            </select>
             <p className="text-xs text-slate-500">
-              Click en un chip para usar una categoría existente, o escribe una
-              nueva. Déjala vacía para inferencia automática.
+              Si la dejas en &quot;Inferir automáticamente&quot;, el clasificador la inferirá a partir de la descripción.
             </p>
           </div>
 
