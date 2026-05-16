@@ -245,6 +245,27 @@ export async function login(
 }
 
 /**
+ * Login para cuentas operacionales (`is_admin=True`): solo email + passphrase,
+ * sin cámara. El backend rechaza con el mismo mensaje genérico si el usuario
+ * no es admin, así que sirve también como "intento legítimo" sin filtrar info.
+ */
+export async function loginAdmin(
+  email: string,
+  passphrase: string,
+): Promise<TokenResponse> {
+  const res = await safeFetch(`${API_BASE}/auth/login-admin`, {
+    method: "POST",
+    body: JSON.stringify({ email, passphrase }),
+    headers: {
+      "Content-Type": "application/json",
+      "ngrok-skip-browser-warning": "true",
+    },
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+/**
  * Genera un Blob JPEG mínimo (1x1 px) para satisfacer el campo 'face'
  * obligatorio del endpoint cuando se envía vídeo como entrada principal.
  */

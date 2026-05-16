@@ -356,18 +356,12 @@ def login_user(request: LoginRequest) -> SecurityVerdict:
     if not is_database_configured():
         return SecurityVerdict(decision="deny", reason="BD no configurada.")
 
-    email_to_check = request.email
-    is_admin_login = False
-    if request.email == "admin@admin" and request.passphrase == "admin":
-        email_to_check = "d.esclarin.2022@alumnos.urjc.es"
-        is_admin_login = True
-
     user_id: Optional[str] = None
     pass_hash: Optional[str] = None
     try:
         with get_session() as session:
             user = session.execute(
-                select(User).where(User.email == email_to_check)
+                select(User).where(User.email == request.email)
             ).scalar_one_or_none()
             if user is not None:
                 user_id = str(user.id)
@@ -387,16 +381,15 @@ def login_user(request: LoginRequest) -> SecurityVerdict:
         )
 
     # 3. Passphrase
-    if not is_admin_login:
-        try:
-            ok = bcrypt.checkpw(request.passphrase.encode(), pass_hash.encode())
-        except (ValueError, TypeError):
-            ok = False
-        if not ok:
-            _ACCESS_CONTROLLER.record_failure(user_id)
-            _maybe_notify_login(user_id, success=False, reason="passphrase")
-            return SecurityVerdict(decision="deny", user_id=user_id,
-                                   reason="Credenciales incorrectas.")
+    try:
+        ok = bcrypt.checkpw(request.passphrase.encode(), pass_hash.encode())
+    except (ValueError, TypeError):
+        ok = False
+    if not ok:
+        _ACCESS_CONTROLLER.record_failure(user_id)
+        _maybe_notify_login(user_id, success=False, reason="passphrase")
+        return SecurityVerdict(decision="deny", user_id=user_id,
+                               reason="Credenciales incorrectas.")
 
     # 4. Biometría
     try:
@@ -534,3 +527,64 @@ def _maybe_notify_login(user_id: str, *, success: bool, reason: str = "",
         logger.info(f"_maybe_notify_login result: {result}")
     except Exception as e:
         logger.warning(f"notify_login falló: {e}")
+
+
+def login_admin(email: str, passphrase: str) -> SecurityVerdict:
+    """Login alternativo para cuentas operacionales (`users.is_admin=True`).
+
+    Salta el pipeline biométrico. Sigue aplicando lockout y check bcrypt.
+    Rechaza con el mismo mensaje genérico que `login_user` ante credenciales
+    incorrectas o un usuario que NO sea admin, para no filtrar qué emails
+    están registrados ni cuáles tienen privilegios.
+    """
+    try:
+        from src.data.database import get_session, is_database_configured
+        from src.data.schema import User
+    except Exception as e:
+        return SecurityVerdict(decision="deny", reason=f"BD no disponible: {e}")
+
+    if not is_database_configured():
+        return SecurityVerdict(decision="deny", reason="BD no configurada.")
+
+    user_id: Optional[str] = None
+    pass_hash: Optional[str] = None
+    is_admin = False
+    try:
+        with get_session() as session:
+            user = session.execute(
+                select(User).where(User.email == email)
+            ).scalar_one_or_none()
+            if user is not None:
+                user_id = str(user.id)
+                pass_hash = user.passphrase_hash
+                is_admin = bool(user.is_admin)
+    except Exception as e:
+        logger.warning(f"login_admin lookup falló: {e}")
+
+    # Mensaje único para no distinguir "no existe" / "no es admin" / "pwd mala".
+    generic_deny = SecurityVerdict(decision="deny", reason="Credenciales incorrectas.")
+
+    if user_id is None or pass_hash is None or not is_admin:
+        return generic_deny
+
+    if _ACCESS_CONTROLLER.is_locked(user_id):
+        return SecurityVerdict(
+            decision="deny", user_id=user_id,
+            reason="Cuenta bloqueada temporalmente por múltiples intentos fallidos.",
+        )
+
+    try:
+        ok = bcrypt.checkpw(passphrase.encode(), pass_hash.encode())
+    except (ValueError, TypeError):
+        ok = False
+    if not ok:
+        _ACCESS_CONTROLLER.record_failure(user_id)
+        return SecurityVerdict(decision="deny", user_id=user_id,
+                               reason="Credenciales incorrectas.")
+
+    _ACCESS_CONTROLLER.record_success(user_id)
+    logger.info(f"login_admin OK: {user_id} ({email})")
+    return SecurityVerdict(
+        decision="allow", user_id=user_id,
+        reason="Admin login OK (sin biometría).",
+    )

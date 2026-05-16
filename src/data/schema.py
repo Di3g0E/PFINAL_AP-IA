@@ -51,6 +51,11 @@ class User(Base):
     #   'basic'    → frases cortas, lenguaje cotidiano, sin tecnicismos.
     #   'advanced' → detallado, con cifras, métricas y términos técnicos.
     role: Mapped[str] = mapped_column(String(16), nullable=False, default="basic")
+    # Cuentas operacionales / recovery: saltan la biometría en /auth/login-admin
+    # (siguen exigiendo passphrase bcrypt y lockout). NUNCA marcar a un usuario
+    # final como admin: el factor biométrico desaparece para esa cuenta.
+    is_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False,
+                                            server_default="false")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),
                                                  server_default=func.now())
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))

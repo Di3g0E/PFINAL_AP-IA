@@ -117,7 +117,34 @@ async def login(
 
     return TokenResponse(
         access_token=create_access_token(verdict.user_id),
-        user_id="admin@admin" if email == "admin@admin" else verdict.user_id,
+        user_id=verdict.user_id,
         similarity=verdict.similarity,
         liveness_score=verdict.liveness_score,
+    )
+
+
+class AdminLoginRequest(BaseModel):
+    """Body de `/auth/login-admin`: solo email + passphrase (sin biometría)."""
+    email: str
+    passphrase: str
+
+
+@router.post(
+    "/login-admin",
+    response_model=TokenResponse,
+    summary="Login para cuentas operacionales (passphrase only, sin biometría)",
+    description=(
+        "Solo válido para usuarios con `users.is_admin = True`. Pensado como "
+        "cuenta de recovery/operación. Si el usuario no es admin o la "
+        "passphrase falla, devuelve 401 con el mismo mensaje genérico que "
+        "el login normal para no filtrar privilegios."
+    ),
+)
+async def login_admin(body: AdminLoginRequest) -> TokenResponse:
+    verdict = security.login_admin(body.email, body.passphrase)
+    if verdict.decision != "allow" or not verdict.user_id:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, verdict.reason)
+    return TokenResponse(
+        access_token=create_access_token(verdict.user_id),
+        user_id=verdict.user_id,
     )
