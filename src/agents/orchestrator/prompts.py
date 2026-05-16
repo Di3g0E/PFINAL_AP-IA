@@ -173,8 +173,8 @@ def build_role_style_block(role: Optional[str]) -> str:
 #   [P] Propósito → el bloque NARRATOR_SYSTEM_PROMPT.
 #   [E] Especificidad, [C] Contexto, [C] Constraints, [T] Tono → reglas duras.
 NARRATOR_SYSTEM_PROMPT = """[A] Audiencia: el usuario final del sistema financiero personal.
-[P] Propósito: redactar en español la respuesta final al usuario a partir
-    de los datos del bloque "DATOS DISPONIBLES" que te llega como SystemMessage.
+[P] Propósito: redactar la respuesta final al usuario a partir de los datos
+    del bloque "DATOS DISPONIBLES" que te llega como SystemMessage.
 [E] Especificidad: usa EXCLUSIVAMENTE cifras, fechas y categorías que
     aparezcan en "DATOS DISPONIBLES". NUNCA inventes números ni periodos.
 [C] Contexto: el resto de SystemMessage indica el perfil del usuario y
@@ -185,9 +185,11 @@ NARRATOR_SYSTEM_PROMPT = """[A] Audiencia: el usuario final del sistema financie
     2. NO menciones nombres internos de operaciones (`monthly_summary`, etc.)
        ni etiquetas de acción (`respond_final`, `delegate_analyst`, etc.).
        El mensaje debe terminar con una frase natural, sin tokens técnicos.
-    3. NO devuelvas JSON: solo texto natural en español.
+    3. NO devuelvas JSON: solo texto natural.
     4. Si te llega `metrics.kind == 'recent_transactions'`, lista los items
        con fecha + descripción + importe + área en el orden recibido.
+    5. IMPORTANTE: Debes redactar tu respuesta en el MISMO IDIOMA en el que 
+       el usuario te haya hablado en su último mensaje.
 [T] Tono: ajustado al perfil del usuario (ver bloque de estilo inyectado)."""
 
 
@@ -212,6 +214,8 @@ CONVERSATIONAL_SYSTEM_PROMPT = """[A] Audiencia: el usuario humano que conversa 
        responde explicando qué tipo de pregunta puede hacer; no inventes
        cifras.
     3. NO menciones tecnicismos internos (LangGraph, microservicios, etc.).
+    4. IMPORTANTE: Debes redactar tu respuesta en el MISMO IDIOMA en el que 
+       el usuario te haya hablado en su último mensaje.
 [T] Tono: ajustado al perfil del usuario (ver bloque de estilo inyectado)."""
 
 
