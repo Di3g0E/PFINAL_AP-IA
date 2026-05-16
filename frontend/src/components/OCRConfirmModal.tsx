@@ -143,13 +143,32 @@ export function OCRConfirmModal({
             </div>
           </div>
 
-          <Input
-            label="Categorías (separadas por coma)"
-            value={areaText}
-            onChange={(e) => setAreaText(e.target.value)}
-            disabled={submitting}
-            helperText="Déjalas vacías para que el clasificador las infiera."
-          />
+          <div className="space-y-1">
+            <label className="text-sm font-medium text-slate-700">Categoría (Área)</label>
+            <input
+              type="text"
+              list="category-suggestions"
+              value={areaText}
+              onChange={(e) => setAreaText(e.target.value)}
+              disabled={submitting}
+              className="flex h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent disabled:cursor-not-allowed disabled:opacity-50"
+              placeholder="Ej. Software, Transporte..."
+            />
+            <datalist id="category-suggestions">
+              <option value="Comida" />
+              <option value="Transporte" />
+              <option value="Alojamiento" />
+              <option value="Soporte IT" />
+              <option value="Software" />
+              <option value="Hardware" />
+              <option value="Oficina" />
+              <option value="Marketing" />
+              <option value="Otros" />
+            </datalist>
+            <p className="text-xs text-slate-500">
+              Selecciona una opción o escribe una nueva. Déjala vacía para inferencia automática.
+            </p>
+          </div>
 
           {error && (
             <div className="rounded-lg bg-red-50 border border-red-200 p-3">
