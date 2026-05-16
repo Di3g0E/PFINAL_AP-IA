@@ -141,6 +141,7 @@ export default function ChatPage() {
                 role: m.role as "user" | "assistant",
                 text: m.content,
                 action: m.action,
+                chart: m.chart,
               })),
           );
         } catch (err) {
@@ -448,7 +449,12 @@ export default function ChatPage() {
           <CardContent className="flex-1 flex flex-col">
             <div
               ref={scrollRef}
-              className="flex-1 overflow-y-auto space-y-4 pr-2"
+              // `min-h-0` es CRÍTICO aquí: por defecto los items flex tienen
+              // `min-height: auto` que ignora el `flex-1` cuando el contenido
+              // crece (charts grandes), haciendo que el contenedor reviente
+              // hacia abajo y el input quede tapado. Con min-h-0 el scroll
+              // interno se activa correctamente y el input se queda fijo.
+              className="flex-1 min-h-0 overflow-y-auto space-y-4 pr-2"
             >
               {turns.length === 0 ? (
                 <div className="text-center py-8">

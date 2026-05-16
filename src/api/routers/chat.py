@@ -112,13 +112,18 @@ def _next_sequence(db: Session, session_id: uuid.UUID) -> int:
 
 def _persist_message(
     db: Session, session: ChatSession, role: str, content: str,
-    action: Optional[str] = None,
+    action: Optional[str] = None, chart: Optional[dict[str, Any]] = None,
 ) -> ChatMessage:
-    """Inserta un mensaje y actualiza `last_message_at`."""
+    """Inserta un mensaje y actualiza `last_message_at`.
+
+    Si la respuesta del asistente incluyó un gráfico, se persiste el spec
+    íntegro en la columna `chart` (JSON). Así al rehidratar la sesión los
+    diagramas vuelven a aparecer sin tener que recalcular el análisis.
+    """
     seq = _next_sequence(db, session.id)
     msg = ChatMessage(
         session_id=session.id, role=role, content=content,
-        action=action, sequence=seq,
+        action=action, sequence=seq, chart=chart,
     )
     db.add(msg)
     session.last_message_at = datetime.now(timezone.utc)
@@ -493,7 +498,9 @@ def chat(
     chart_dict = _build_chart_spec(final.get("analysis_report"))
     chart = ChartSpecOut(**chart_dict) if chart_dict else None
 
-    _persist_message(db, session, "assistant", text, action=action)
+    # Persistimos el chart junto al mensaje para que la rehidratación de la
+    # sesión (GET /chat/sessions/{id}) lo recupere.
+    _persist_message(db, session, "assistant", text, action=action, chart=chart_dict)
     _maybe_summarize(db, session, user_id)
 
     return ChatResponse(
@@ -521,6 +528,7 @@ class ChatMessageOut(BaseModel):
     action: Optional[str] = None
     sequence: int
     created_at: datetime
+    chart: Optional[dict[str, Any]] = None
 
 
 class ChatSessionDetail(BaseModel):
@@ -566,6 +574,7 @@ def _message_to_out(msg: ChatMessage) -> ChatMessageOut:
         action=msg.action,
         sequence=msg.sequence,
         created_at=msg.created_at,
+        chart=msg.chart,
     )
 
 

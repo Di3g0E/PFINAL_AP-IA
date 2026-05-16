@@ -234,6 +234,7 @@ export type ChatMessageOut = {
   action: string | null;
   sequence: number;
   created_at: string;
+  chart: ChartSpec | null;
 };
 
 export type ChatSessionDetail = {

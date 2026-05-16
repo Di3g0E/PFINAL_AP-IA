@@ -250,6 +250,11 @@ class ChatMessage(Base):
     # `respond_final`, ...). Solo aplica al rol assistant.
     action: Mapped[Optional[str]] = mapped_column(String(64))
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Spec opcional del gráfico que acompañó a la respuesta (Fase 4). Se
+    # persiste para que al recargar/rehidratar una sesión los charts vuelvan
+    # a aparecer sin tener que regenerar el análisis. Formato:
+    # {"type": "line|bar|pie|area", "title": str, "data": [...], "explanation": str}
+    chart: Mapped[Optional[dict]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(),
     )

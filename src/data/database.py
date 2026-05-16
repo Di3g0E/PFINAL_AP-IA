@@ -118,6 +118,11 @@ _PENDING_MIGRATIONS: dict[str, dict[str, str]] = {
         # role para Fase 3: 'basic' default, 'advanced' por opt-in en /settings.
         "role": "VARCHAR(16) NOT NULL DEFAULT 'basic'",
     },
+    "chat_messages": {
+        # chart spec persistido (Fase 4) — para que al rehidratar una sesión
+        # los gráficos vuelvan a aparecer sin regenerar el análisis.
+        "chart": "JSON",
+    },
 }
 
 
