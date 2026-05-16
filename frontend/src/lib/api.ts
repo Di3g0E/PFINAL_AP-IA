@@ -572,6 +572,24 @@ export async function rejectPending(id: string): Promise<{ id: string; status: s
   return res.json();
 }
 
+export type CategoryStat = { name: string; count: number };
+export type UserCategories = {
+  income: CategoryStat[];
+  expenses: CategoryStat[];
+};
+
+/**
+ * Categorías que el usuario ya tiene en sus transacciones, separadas por
+ * tipo y ordenadas por frecuencia. La UI las usa como sugerencias en los
+ * modales de alta. Si la cuenta es nueva el backend devuelve un fallback
+ * canónico (Salary/Deposit, Food/Leisure/Invoice/Investment/Vacations).
+ */
+export async function listUserCategories(): Promise<UserCategories> {
+  const res = await authedFetch("/transactions/categories");
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
 export async function listTransactions(): Promise<TransactionRecord[]> {
   const res = await authedFetch("/transactions");
   if (!res.ok) throw new Error(await parseError(res));

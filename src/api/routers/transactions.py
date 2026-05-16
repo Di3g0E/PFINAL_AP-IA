@@ -67,6 +67,18 @@ class ManualTransactionResponse(BaseModel):
     rejected: list[dict] = []
 
 
+class CategoryStat(BaseModel):
+    """Una categoría usada por el usuario y cuántas veces aparece."""
+    name: str
+    count: int
+
+
+class UserCategoriesResponse(BaseModel):
+    """Categorías que el usuario ya tiene en sus transacciones, agrupadas por tipo."""
+    income: list[CategoryStat]
+    expenses: list[CategoryStat]
+
+
 class OCRExtractedOut(BaseModel):
     """Borrador extraído por OCR antes de la confirmación del usuario."""
     amount: Decimal
@@ -218,6 +230,69 @@ def list_transactions(
             )
             for r in records
         ]
+
+
+@router.get(
+    "/categories",
+    response_model=UserCategoriesResponse,
+    summary="Categorías usadas por el usuario (con frecuencia), separadas por tipo",
+)
+def list_user_categories(
+    user_id: str = Depends(get_current_user_id),
+) -> UserCategoriesResponse:
+    """Devuelve las categorías que el usuario ya tiene en sus transacciones,
+    ordenadas por frecuencia descendente. Si la cuenta es nueva y no tiene
+    transacciones, devuelve un fallback con las categorías "canónicas" del
+    CSV base para que la UI tenga algo razonable que sugerir.
+    """
+    import uuid as _uuid
+    from collections import Counter
+    from src.data.database import get_session
+    from src.data.schema import Transaction
+    from sqlalchemy import select
+
+    fallback = UserCategoriesResponse(
+        income=[CategoryStat(name="Salary", count=0), CategoryStat(name="Deposit", count=0)],
+        expenses=[
+            CategoryStat(name="Food", count=0),
+            CategoryStat(name="Leisure", count=0),
+            CategoryStat(name="Invoice", count=0),
+            CategoryStat(name="Investment", count=0),
+            CategoryStat(name="Vacations", count=0),
+        ],
+    )
+
+    try:
+        user_uuid = _uuid.UUID(user_id)
+    except (ValueError, AttributeError, TypeError):
+        return fallback
+
+    with get_session() as session:
+        rows = session.execute(
+            select(Transaction.area, Transaction.type)
+            .where(Transaction.user_id == user_uuid)
+        ).all()
+
+    if not rows:
+        return fallback
+
+    inc = Counter()
+    exp = Counter()
+    for areas, tx_type in rows:
+        for a in (areas or []):
+            a = (a or "").strip()
+            if not a:
+                continue
+            (inc if tx_type == "Income" else exp)[a] += 1
+
+    def _to_stats(counter: Counter) -> list[CategoryStat]:
+        return [CategoryStat(name=name, count=cnt) for name, cnt in counter.most_common()]
+
+    result = UserCategoriesResponse(
+        income=_to_stats(inc) or fallback.income,
+        expenses=_to_stats(exp) or fallback.expenses,
+    )
+    return result
 
 
 @router.get(

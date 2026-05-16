@@ -8,7 +8,9 @@ import {
   classifyArea,
   extractFromImage,
   addManualTransaction,
+  listUserCategories,
   type TransactionRecord,
+  type UserCategories,
 } from "@/lib/api";
 
 type Props = {
@@ -29,7 +31,11 @@ export function RecordModal({ open, onClose, onSuccess }: Props) {
   const [classifying, setClassifying] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Limpiar campos al abrir
+  // Categorías reales del usuario (cargadas del backend). Se filtran por
+  // `type` en el render para sugerir solo las del tipo seleccionado.
+  const [userCats, setUserCats] = useState<UserCategories | null>(null);
+
+  // Limpiar campos al abrir + cargar categorías del usuario
   useEffect(() => {
     if (open) {
       setDescription("");
@@ -38,8 +44,15 @@ export function RecordModal({ open, onClose, onSuccess }: Props) {
       setType("Expenses");
       setAreaText("");
       setError(null);
+      listUserCategories()
+        .then(setUserCats)
+        .catch(() => setUserCats(null));
     }
   }, [open]);
+
+  const suggestedCategories = type === "Income"
+    ? userCats?.income ?? []
+    : userCats?.expenses ?? [];
 
   if (!open) return null;
 
@@ -96,7 +109,10 @@ export function RecordModal({ open, onClose, onSuccess }: Props) {
   };
 
   const handleDescriptionBlur = async () => {
-    if (!description.trim() || areaText.trim()) return; // Si ya hay area, no sobreescribir
+    // Si ya hay categoría (sea por OCR o porque el usuario la editó),
+    // NO la sobreescribimos. Esto era el bug del flujo OCR: al re-tocar
+    // la descripción se reclasificaba y se perdía el cambio manual.
+    if (!description.trim() || areaText.trim()) return;
     setClassifying(true);
     try {
       const cat = await classifyArea(description.trim());
@@ -219,30 +235,65 @@ export function RecordModal({ open, onClose, onSuccess }: Props) {
               </div>
             </div>
 
-            <div className="space-y-1">
+            <div className="space-y-2">
               <label className="text-sm font-medium text-slate-700">Categoría (Área)</label>
+
+              {/* Chips de las categorías que el usuario ya usa, filtradas
+                  por el tipo (Income/Expenses) seleccionado. Click → la
+                  pone como categoría única. Permite combinar con texto
+                  libre escribiendo después en el input. */}
+              {suggestedCategories.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {suggestedCategories.map((c) => {
+                    const active = areaText
+                      .split(",")
+                      .map((s) => s.trim().toLowerCase())
+                      .includes(c.name.toLowerCase());
+                    return (
+                      <button
+                        key={c.name}
+                        type="button"
+                        onClick={() => setAreaText(c.name)}
+                        disabled={loading || ocrLoading}
+                        className={`px-2 py-0.5 rounded-full text-xs font-medium border transition-colors ${
+                          active
+                            ? "bg-blue-600 text-white border-blue-600"
+                            : "bg-white text-slate-700 border-slate-300 hover:bg-slate-50"
+                        }`}
+                        title={c.count > 0 ? `${c.count} usos previos` : "Sugerida"}
+                      >
+                        {c.name}
+                        {c.count > 0 && (
+                          <span className="ml-1 opacity-70">({c.count})</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
               <input
                 type="text"
-                list="category-suggestions"
+                list="record-category-suggestions"
                 value={areaText}
                 onChange={(e) => setAreaText(e.target.value)}
                 disabled={loading || ocrLoading}
                 className="flex h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent disabled:cursor-not-allowed disabled:opacity-50"
-                placeholder="Ej. Software, Transporte..."
+                placeholder={
+                  suggestedCategories[0]?.name
+                    ? `Ej. ${suggestedCategories[0].name}…`
+                    : "Escribe una categoría…"
+                }
               />
-              <datalist id="category-suggestions">
-                <option value="Comida" />
-                <option value="Transporte" />
-                <option value="Alojamiento" />
-                <option value="Soporte IT" />
-                <option value="Software" />
-                <option value="Hardware" />
-                <option value="Oficina" />
-                <option value="Marketing" />
-                <option value="Otros" />
+              <datalist id="record-category-suggestions">
+                {suggestedCategories.map((c) => (
+                  <option key={c.name} value={c.name} />
+                ))}
               </datalist>
+
               <p className="text-xs text-slate-500">
-                Selecciona, escribe una nueva o deja que se infiera sola.
+                Click en un chip para usar una categoría existente, o escribe
+                una nueva. Si la dejas vacía el clasificador la inferirá.
               </p>
             </div>
 
