@@ -29,6 +29,21 @@ from __future__ import annotations
 import os
 os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
 
+# Pre-carga torch en el hilo principal del worker. En Windows + OneDrive,
+# la inicialización de `torch` (carga de shm.dll y dependencias) falla con
+# `OSError [WinError 127]` si ocurre por primera vez en un thread auxiliar
+# (p. ej. el AnyIO worker que sirve `/chat` → `get_llm` → `langchain_groq`
+# → `langchain_core.language_models.base` → `from transformers import ...`
+# → `import torch`). Importarlo aquí, al cargar el módulo del worker en su
+# hilo principal, "fija" los DLLs en `sys.modules` y los reimports
+# posteriores desde threads se resuelven por caché sin volver a tocar el FS.
+try:
+    import torch  # noqa: F401
+except Exception:
+    # Si torch no está instalado o falla, lo dejamos para que falle de forma
+    # localizada en el sitio que de verdad lo necesita.
+    pass
+
 import asyncio
 from contextlib import asynccontextmanager
 from typing import AsyncIterator

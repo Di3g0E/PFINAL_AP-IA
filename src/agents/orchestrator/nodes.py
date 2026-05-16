@@ -71,13 +71,13 @@ def _route(state: OrchestratorState, iterations: int) -> dict:
 
     with Stopwatch(agent="orchestrator", action="route",
                    user_id=user_id, session_id=session_id) as sw:
-        llm = get_llm(user_id=user_id)
-        router = llm.with_structured_output(OrchestratorDecision)
-        prompt: list[BaseMessage] = [
-            SystemMessage(content=get_router_system_prompt()),
-            *state.get("messages", []),
-        ]
         try:
+            llm = get_llm(user_id=user_id)
+            router = llm.with_structured_output(OrchestratorDecision)
+            prompt: list[BaseMessage] = [
+                SystemMessage(content=get_router_system_prompt()),
+                *state.get("messages", []),
+            ]
             with start_observation(
                 name="orchestrator.route",
                 as_type="generation",
@@ -123,19 +123,19 @@ def _narrate(state: OrchestratorState, iterations: int) -> dict:
 
     with Stopwatch(agent="orchestrator", action="narrate",
                    user_id=user_id, session_id=session_id) as sw:
-        llm = get_llm(user_id=user_id)
-        context_block = build_context_block(
-            analysis_report=state.get("analysis_report"),
-            security_verdict=state.get("security_verdict"),
-            registry_result=state.get("registry_result"),
-        )
-        prompt: list[BaseMessage] = [
-            SystemMessage(content=NARRATOR_SYSTEM_PROMPT),
-            SystemMessage(content=build_role_style_block(user_role)),
-            SystemMessage(content=context_block),
-            *state.get("messages", []),
-        ]
         try:
+            llm = get_llm(user_id=user_id)
+            context_block = build_context_block(
+                analysis_report=state.get("analysis_report"),
+                security_verdict=state.get("security_verdict"),
+                registry_result=state.get("registry_result"),
+            )
+            prompt: list[BaseMessage] = [
+                SystemMessage(content=NARRATOR_SYSTEM_PROMPT),
+                SystemMessage(content=build_role_style_block(user_role)),
+                SystemMessage(content=context_block),
+                *state.get("messages", []),
+            ]
             with start_observation(
                 name="orchestrator.narrate",
                 as_type="generation",
@@ -399,22 +399,30 @@ def conversational_node(state: OrchestratorState) -> dict:
 
     with Stopwatch(agent="conversational", action="reply",
                    user_id=user_id, session_id=session_id) as sw:
-        llm = get_llm(user_id=user_id)
-        prompt: list[BaseMessage] = [
-            SystemMessage(content=CONVERSATIONAL_SYSTEM_PROMPT),
-            SystemMessage(content=build_role_style_block(user_role)),
-            *state.get("messages", []),
-        ]
-        with start_observation(
-            name="conversational.reply",
-            as_type="generation",
-            input={"user_role": user_role},
-            user_id=user_id,
-            session_id=session_id,
-        ):
-            response = llm.invoke(prompt)
-        text = response.content if hasattr(response, "content") else str(response)
-        text = _strip_action_labels(text)
+        try:
+            llm = get_llm(user_id=user_id)
+            prompt: list[BaseMessage] = [
+                SystemMessage(content=CONVERSATIONAL_SYSTEM_PROMPT),
+                SystemMessage(content=build_role_style_block(user_role)),
+                *state.get("messages", []),
+            ]
+            with start_observation(
+                name="conversational.reply",
+                as_type="generation",
+                input={"user_role": user_role},
+                user_id=user_id,
+                session_id=session_id,
+            ):
+                response = llm.invoke(prompt)
+            text = response.content if hasattr(response, "content") else str(response)
+            text = _strip_action_labels(text)
+        except Exception as e:
+            sw.payload["error"] = f"{type(e).__name__}: {e}"
+            text = (
+                "No pude generar la respuesta conversacional por un problema "
+                f"técnico ({type(e).__name__}). Vuelve a intentarlo en unos "
+                "segundos."
+            )
         sw.payload["chars"] = len(text)
         sw.payload["role"] = user_role or "basic"
 
