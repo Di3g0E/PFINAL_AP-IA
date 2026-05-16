@@ -463,6 +463,8 @@ def chat(
             turn_thread_id = f"{user_id}:{session.id}:{uuid.uuid4()}"
             config = {"configurable": {"thread_id": turn_thread_id}}
 
+            graph_failed = False
+            graph_error: Optional[Exception] = None
             try:
                 final = _get_graph().invoke(
                     {
@@ -482,16 +484,32 @@ def chat(
                     config=config,
                 )
             except Exception as e:
+                # No propagamos 500: el chat tiene que responder SIEMPRE algo
+                # legible. El detalle técnico queda en `events` (logger.exception)
+                # para el panel admin.
                 logger.exception(f"chat invoke falló: {e}")
-                raise HTTPException(
-                    status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    f"Error en el grafo: {type(e).__name__}",
-                ) from e
+                graph_failed = True
+                graph_error = e
+                final = {"messages": [], "last_decision": None,
+                         "analysis_report": None}
 
-    last_msg = final["messages"][-1]
-    decision = final.get("last_decision")
-    text = last_msg.content if hasattr(last_msg, "content") else str(last_msg)
-    action = decision.action if decision else None
+    if graph_failed:
+        text = (
+            f"Lo siento, no pude procesar tu mensaje por un fallo técnico del "
+            f"sistema ({type(graph_error).__name__}). Inténtalo de nuevo en unos "
+            "segundos. Si persiste, revisa el panel Monitor o avisa al "
+            "administrador."
+        )
+        decision = None
+        action = None
+    else:
+        last_msg = final["messages"][-1] if final.get("messages") else None
+        decision = final.get("last_decision")
+        text = (
+            last_msg.content if last_msg is not None and hasattr(last_msg, "content")
+            else (str(last_msg) if last_msg is not None else "(sin respuesta)")
+        )
+        action = decision.action if decision else None
 
     # Si la respuesta viene de un análisis con series temporales/categóricas,
     # generamos un ChartSpec para que el frontend lo pinte junto al texto.
