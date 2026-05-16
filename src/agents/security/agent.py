@@ -358,6 +358,7 @@ def login_user(request: LoginRequest) -> SecurityVerdict:
 
     user_id: Optional[str] = None
     pass_hash: Optional[str] = None
+    is_admin = False
     try:
         with get_session() as session:
             user = session.execute(
@@ -366,6 +367,7 @@ def login_user(request: LoginRequest) -> SecurityVerdict:
             if user is not None:
                 user_id = str(user.id)
                 pass_hash = user.passphrase_hash
+                is_admin = bool(user.is_admin)
     except Exception as e:
         logger.warning(f"login_user lookup falló: {e}")
 
@@ -390,6 +392,19 @@ def login_user(request: LoginRequest) -> SecurityVerdict:
         _maybe_notify_login(user_id, success=False, reason="passphrase")
         return SecurityVerdict(decision="deny", user_id=user_id,
                                reason="Credenciales incorrectas.")
+
+    # 3.5. Bypass biometría para cuentas admin: tras passphrase OK devolvemos
+    # allow sin tocar el pipeline. Esto permite que un admin entre por el
+    # endpoint normal /auth/login aunque el frontend mande foto/vídeo, lo cual
+    # es necesario mientras Vercel no haya redeployado /admin/login. La foto
+    # se ignora completamente — no se almacena ni se compara.
+    if is_admin:
+        _ACCESS_CONTROLLER.record_success(user_id)
+        logger.info(f"login_user (admin bypass): {user_id} ({request.email})")
+        return SecurityVerdict(
+            decision="allow", user_id=user_id,
+            reason="Admin login OK (biometría omitida).",
+        )
 
     # 4. Biometría
     try:

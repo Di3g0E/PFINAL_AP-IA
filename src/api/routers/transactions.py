@@ -187,11 +187,22 @@ def list_transactions(
     limit: int = 50,
     user_id: str = Depends(get_current_user_id),
 ) -> list[TransactionRecordOut]:
-    from src.data.session import get_session
+    import uuid as _uuid
+    from src.data.database import get_session
     from src.data.schema import Transaction
     from sqlalchemy import select
+    try:
+        user_uuid = _uuid.UUID(user_id)
+    except (ValueError, AttributeError, TypeError):
+        # JWT con user_id no-UUID (p. ej. tokens emitidos antes de la
+        # retirada del backdoor "admin@admin"). Devolvemos lista vacía
+        # en lugar de 500 para no romper el frontend.
+        return []
     with get_session() as session:
-        stmt = select(Transaction).where(Transaction.user_id == user_id).order_by(Transaction.date.desc()).limit(limit)
+        stmt = (select(Transaction)
+                .where(Transaction.user_id == user_uuid)
+                .order_by(Transaction.date.desc())
+                .limit(limit))
         records = session.execute(stmt).scalars().all()
         return [
             TransactionRecordOut(

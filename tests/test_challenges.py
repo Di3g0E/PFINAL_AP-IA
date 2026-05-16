@@ -20,20 +20,20 @@ class TestBlinkVerification:
     def test_no_face_detected_returns_false(self):
         """Vídeo con imágenes sin caras devuelve False (o True si mediapipe no está).
         Como pasamos marcos negros puros, mediapipe no detectará rostro.
+
+        Nota: comprobamos `_mp_face_mesh` directamente (no `import mediapipe`)
+        porque algunas builds modernas (0.10.35 en Python 3.12) eliminan el
+        módulo legacy `mediapipe.solutions` aunque `import mediapipe` siga
+        funcionando — en ese caso el challenge se salta por diseño.
         """
         frames = [_create_mock_frame() for _ in range(5)]
-        
-        try:
-            import mediapipe
-            has_mp = True
-        except ImportError:
-            has_mp = False
-            
+
+        from src.agents.security import challenges as _ch
+        face_mesh_available = _ch._mp_face_mesh is not None
+
         result = verify_blink_from_video(frames)
-        
-        # Si mediapipe no está instalado (como puede ocurrir en CI sin full deps), devuelve True.
-        # Si está, intentará detectar y como es negro fallará.
-        if has_mp:
+
+        if face_mesh_available:
             assert result is False
         else:
             assert result is True

@@ -65,15 +65,17 @@ def verify_blink_from_video(frames_bgr: list[np.ndarray],
     Returns:
         True si se detecta un parpadeo claro, False en caso contrario.
     """
+    # Frames vacíos: sin material para evaluar, rechaza explícitamente
+    # (suite de tests depende de este invariante).
+    if not frames_bgr:
+        return False
+
     if mp is None or _mp_face_mesh is None:
         logger.warning(
             "MediaPipe.solutions no disponible (build sin API legacy). "
             "Challenge de parpadeo se salta (aprueba por defecto)."
         )
         return True
-        
-    if not frames_bgr:
-        return False
         
     ears = []
     
