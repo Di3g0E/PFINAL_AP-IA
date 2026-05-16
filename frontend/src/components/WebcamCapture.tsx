@@ -170,7 +170,7 @@ export function WebcamCapture({
           autoPlay
           playsInline
           muted
-          className="block w-full"
+          className="block w-full -scale-x-100"
         />
         {/* Barra de progreso durante grabación de vídeo */}
         {recording && (
