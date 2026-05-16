@@ -93,6 +93,7 @@ export function setToken(token: string, userId: string) {
 export function clearToken() {
   localStorage.removeItem("token");
   localStorage.removeItem("user_id");
+  localStorage.removeItem("is_admin");
   // Limpia también la sesión de chat activa: evita que al loguearse otro
   // usuario distinto en el mismo navegador se intente rehidratar una
   // sesión que no le pertenece (devolvería 404 y se limpiaría sola,
@@ -106,6 +107,22 @@ export function clearToken() {
 export function getUserId(): string | null {
   if (typeof window === "undefined") return null;
   return localStorage.getItem("user_id");
+}
+
+/**
+ * Lee el flag `is_admin` que persistimos tras llamar a `me()`. Sirve para
+ * que NavBar y guardas de página decidan al instante (sin esperar a un
+ * fetch) qué pestañas mostrar. La fuente de verdad sigue siendo el backend.
+ */
+export function getIsAdmin(): boolean {
+  if (typeof window === "undefined") return false;
+  return localStorage.getItem("is_admin") === "true";
+}
+
+export function setIsAdmin(flag: boolean) {
+  if (typeof window === "undefined") return;
+  localStorage.setItem("is_admin", flag ? "true" : "false");
+  window.dispatchEvent(new Event("auth-change"));
 }
 
 async function parseError(res: Response): Promise<string> {
@@ -261,6 +278,61 @@ export async function loginAdmin(
       "ngrok-skip-browser-warning": "true",
     },
   });
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+
+export type MeInfo = {
+  user_id: string;
+  email: string;
+  role: string;
+  is_admin: boolean;
+};
+
+/**
+ * Identidad + privilegios del usuario autenticado. Llamarla justo después
+ * del login para refrescar `localStorage.is_admin` y poder pintar el
+ * NavBar correcto antes de la primera petición de datos.
+ */
+export async function me(): Promise<MeInfo> {
+  const res = await authedFetch("/auth/me");
+  if (!res.ok) throw new Error(await parseError(res));
+  const body = (await res.json()) as MeInfo;
+  if (typeof window !== "undefined") {
+    localStorage.setItem("is_admin", body.is_admin ? "true" : "false");
+    window.dispatchEvent(new Event("auth-change"));
+  }
+  return body;
+}
+
+
+export type MonitorEvent = {
+  ts: string;                  // ISO datetime
+  agent: string;
+  action: string;
+  status: string;              // 'ok' | 'error' | 'warning' | 'denied'
+  latency_ms: number | null;
+  user_id: string | null;
+  session_id: string | null;
+  payload: Record<string, unknown> | null;
+};
+
+/**
+ * Lee los últimos eventos crudos de la tabla `events` (analizador de logs
+ * del panel admin). Acepta filtros opcionales por status / agent.
+ */
+export async function getMonitorEvents(opts: {
+  limit?: number;
+  status?: string;
+  agent?: string;
+} = {}): Promise<MonitorEvent[]> {
+  const qs = new URLSearchParams();
+  if (opts.limit) qs.set("limit", String(opts.limit));
+  if (opts.status) qs.set("status", opts.status);
+  if (opts.agent) qs.set("agent", opts.agent);
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  const res = await authedFetch(`/monitor/events${suffix}`);
   if (!res.ok) throw new Error(await parseError(res));
   return res.json();
 }

@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import {
   clearToken,
   confirmPending,
+  getIsAdmin,
   getUserId,
   listPending,
   rejectPending,
@@ -44,6 +45,10 @@ export default function PendingPage() {
   useEffect(() => {
     if (!getUserId()) {
       router.replace("/login");
+      return;
+    }
+    if (getIsAdmin()) {
+      router.replace("/admin/monitor");
       return;
     }
     refresh();

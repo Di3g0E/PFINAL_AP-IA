@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 
 import { WebcamCapture } from "@/components/WebcamCapture";
-import { login, setToken } from "@/lib/api";
+import { login, me, setToken } from "@/lib/api";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/Card";
@@ -29,7 +29,9 @@ export default function LoginPage() {
     try {
       const r = await login(email, passphrase, faceBlob);
       setToken(r.access_token, r.user_id);
-      router.push("/chat");
+      // Si la cuenta es admin, /chat no aplica → vamos al panel de Monitor.
+      const info = await me().catch(() => null);
+      router.push(info?.is_admin ? "/admin/monitor" : "/chat");
     } catch (err) {
       setError((err as Error).message);
     } finally {

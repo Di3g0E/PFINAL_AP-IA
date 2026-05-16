@@ -17,12 +17,12 @@ en los endpoints protegidos.
 from __future__ import annotations
 from typing import Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel
 
 from src.agents.contracts import LoginRequest, RegisterRequest
 from src.agents.security import agent as security
-from src.api.dependencies import create_access_token
+from src.api.dependencies import create_access_token, get_current_user_id
 
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -148,3 +148,37 @@ async def login_admin(body: AdminLoginRequest) -> TokenResponse:
         access_token=create_access_token(verdict.user_id),
         user_id=verdict.user_id,
     )
+
+
+class MeResponse(BaseModel):
+    """Identidad y privilegios del usuario asociado al JWT actual."""
+    user_id: str
+    email: str
+    role: str
+    is_admin: bool
+
+
+@router.get(
+    "/me",
+    response_model=MeResponse,
+    summary="Devuelve identidad y privilegios del usuario autenticado",
+)
+def me(user_id: str = Depends(get_current_user_id)) -> MeResponse:
+    import uuid as _uuid
+    from sqlalchemy import select
+    from src.data.database import get_session
+    from src.data.schema import User
+    try:
+        uid = _uuid.UUID(user_id)
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Token con sub inválido")
+    with get_session() as s:
+        user = s.execute(select(User).where(User.id == uid)).scalar_one_or_none()
+        if user is None:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Usuario no encontrado")
+        return MeResponse(
+            user_id=str(user.id),
+            email=user.email,
+            role=user.role,
+            is_admin=bool(user.is_admin),
+        )

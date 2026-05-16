@@ -12,6 +12,7 @@ import {
   extractFromImage,
   getChatSession,
   getCurrentSessionId,
+  getIsAdmin,
   getUserId,
   listChatSessions,
   setCurrentSessionId,
@@ -124,6 +125,10 @@ export default function ChatPage() {
     const uid = getUserId();
     if (!uid) {
       router.replace("/login");
+      return;
+    }
+    if (getIsAdmin()) {
+      router.replace("/admin/monitor");
       return;
     }
     setUserId(uid);

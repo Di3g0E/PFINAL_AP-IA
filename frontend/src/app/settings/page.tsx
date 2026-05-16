@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { getUserId, getUserRole, updateUserRole, type UserRole } from "@/lib/api";
+import { getIsAdmin, getUserId, getUserRole, updateUserRole, type UserRole } from "@/lib/api";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/Card";
@@ -27,6 +27,8 @@ export default function SettingsPage() {
     const uid = getUserId();
     if (!uid) {
       router.replace("/login");
+    } else if (getIsAdmin()) {
+      router.replace("/admin/monitor");
     } else {
       setUserId(uid);
       loadSettings();

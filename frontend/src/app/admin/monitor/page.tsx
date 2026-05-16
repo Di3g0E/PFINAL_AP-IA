@@ -7,8 +7,8 @@ import {
 } from "recharts";
 
 import {
-  clearToken, getMonitorReport, getUserId,
-  type MonitoringReport,
+  clearToken, getIsAdmin, getMonitorEvents, getMonitorReport, getUserId,
+  type MonitorEvent, type MonitoringReport,
 } from "@/lib/api";
 import { Button } from "@/components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
@@ -52,6 +52,14 @@ export default function MonitorPage() {
   const [error, setError] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
 
+  // Analizador de logs
+  const [events, setEvents] = useState<MonitorEvent[]>([]);
+  const [logStatus, setLogStatus] = useState<string>("");
+  const [logAgent, setLogAgent] = useState<string>("");
+  const [logLimit, setLogLimit] = useState<number>(50);
+  const [logsLoading, setLogsLoading] = useState(false);
+  const [logsError, setLogsError] = useState<string | null>(null);
+
   const refresh = useCallback(async (minutes: number) => {
     setLoading(true);
     setError(null);
@@ -71,6 +79,23 @@ export default function MonitorPage() {
     }
   }, [router]);
 
+  const refreshLogs = useCallback(async () => {
+    setLogsLoading(true);
+    setLogsError(null);
+    try {
+      const list = await getMonitorEvents({
+        limit: logLimit,
+        status: logStatus || undefined,
+        agent: logAgent || undefined,
+      });
+      setEvents(list);
+    } catch (err) {
+      setLogsError((err as Error).message);
+    } finally {
+      setLogsLoading(false);
+    }
+  }, [logLimit, logStatus, logAgent]);
+
   // Auth + carga inicial
   useEffect(() => {
     const uid = getUserId();
@@ -78,16 +103,26 @@ export default function MonitorPage() {
       router.replace("/login");
       return;
     }
+    if (!getIsAdmin()) {
+      // Solo admins pueden ver esta página: a un usuario normal lo
+      // mandamos al chat para evitar 401s y confusión.
+      router.replace("/chat");
+      return;
+    }
     setUserId(uid);
     refresh(windowMinutes);
-  }, [router, refresh, windowMinutes]);
+    refreshLogs();
+  }, [router, refresh, refreshLogs, windowMinutes]);
 
   // Auto-refresh cada N s mientras el usuario esté en la página
   useEffect(() => {
     if (!userId) return;
-    const handle = setInterval(() => refresh(windowMinutes), REFRESH_INTERVAL_MS);
+    const handle = setInterval(() => {
+      refresh(windowMinutes);
+      refreshLogs();
+    }, REFRESH_INTERVAL_MS);
     return () => clearInterval(handle);
-  }, [userId, windowMinutes, refresh]);
+  }, [userId, windowMinutes, refresh, refreshLogs]);
 
   if (!userId) {
     return <p className="text-sm text-slate-500">Cargando…</p>;
@@ -272,6 +307,113 @@ export default function MonitorPage() {
             )}
           </>
         )}
+
+        {/* Analizador de logs (tabla `events`) */}
+        <Card variant="glass" className="mt-6">
+          <CardHeader>
+            <CardTitle className="text-base flex items-center justify-between flex-wrap gap-2">
+              <span>Analizador de logs</span>
+              <span className="text-xs font-normal text-slate-500">
+                Últimos eventos en la BD · sin PII en claro
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap items-center gap-2 mb-3">
+              <select
+                value={logStatus}
+                onChange={(e) => setLogStatus(e.target.value)}
+                className="text-sm border border-slate-300 rounded-md px-2 py-1 bg-white"
+              >
+                <option value="">Todos los status</option>
+                <option value="ok">ok</option>
+                <option value="error">error</option>
+                <option value="warning">warning</option>
+                <option value="denied">denied</option>
+              </select>
+              <select
+                value={logAgent}
+                onChange={(e) => setLogAgent(e.target.value)}
+                className="text-sm border border-slate-300 rounded-md px-2 py-1 bg-white"
+              >
+                <option value="">Todos los agentes</option>
+                <option value="orchestrator">orchestrator</option>
+                <option value="conversational">conversational</option>
+                <option value="analyst">analyst</option>
+                <option value="registrar">registrar</option>
+                <option value="security">security</option>
+                <option value="monitor">monitor</option>
+                <option value="api">api</option>
+              </select>
+              <select
+                value={logLimit}
+                onChange={(e) => setLogLimit(Number(e.target.value))}
+                className="text-sm border border-slate-300 rounded-md px-2 py-1 bg-white"
+              >
+                <option value={25}>25 últimos</option>
+                <option value={50}>50 últimos</option>
+                <option value={100}>100 últimos</option>
+                <option value={250}>250 últimos</option>
+              </select>
+              <Button variant="secondary" size="sm" onClick={refreshLogs} disabled={logsLoading}>
+                {logsLoading ? "Cargando…" : "Refrescar logs"}
+              </Button>
+              <span className="text-xs text-slate-500">{events.length} eventos</span>
+            </div>
+
+            {logsError && (
+              <p className="text-sm text-red-600 mb-2">Error: {logsError}</p>
+            )}
+
+            <div className="overflow-x-auto max-h-96 overflow-y-auto border border-slate-200 rounded-md">
+              <table className="w-full text-xs">
+                <thead className="bg-slate-50 sticky top-0 border-b border-slate-200 text-slate-600">
+                  <tr>
+                    <th className="px-3 py-2 text-left">Timestamp</th>
+                    <th className="px-3 py-2 text-left">Agente</th>
+                    <th className="px-3 py-2 text-left">Acción</th>
+                    <th className="px-3 py-2 text-left">Status</th>
+                    <th className="px-3 py-2 text-right">Lat (ms)</th>
+                    <th className="px-3 py-2 text-left">User</th>
+                    <th className="px-3 py-2 text-left">Payload</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {events.length === 0 ? (
+                    <tr><td colSpan={7} className="px-3 py-4 text-center text-slate-400">
+                      Sin eventos con esos filtros.
+                    </td></tr>
+                  ) : events.map((e, i) => (
+                    <tr key={i} className="border-b border-slate-100">
+                      <td className="px-3 py-1.5 font-mono whitespace-nowrap text-slate-600">
+                        {new Date(e.ts).toLocaleString("es-ES", { hour12: false })}
+                      </td>
+                      <td className="px-3 py-1.5 font-mono text-slate-700">{e.agent}</td>
+                      <td className="px-3 py-1.5 font-mono text-slate-700">{e.action}</td>
+                      <td className="px-3 py-1.5">
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                          e.status === "ok" ? "bg-green-100 text-green-700" :
+                          e.status === "error" ? "bg-red-100 text-red-700" :
+                          e.status === "warning" ? "bg-amber-100 text-amber-700" :
+                                                    "bg-slate-100 text-slate-700"
+                        }`}>{e.status}</span>
+                      </td>
+                      <td className="px-3 py-1.5 text-right tabular-nums text-slate-600">
+                        {e.latency_ms ?? "—"}
+                      </td>
+                      <td className="px-3 py-1.5 font-mono text-slate-500">
+                        {e.user_id ? e.user_id.slice(0, 8) + "…" : "—"}
+                      </td>
+                      <td className="px-3 py-1.5 font-mono text-slate-500 max-w-md truncate">
+                        {e.payload ? JSON.stringify(e.payload) : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
       </main>
     </div>
   );

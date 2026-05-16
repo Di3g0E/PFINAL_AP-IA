@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 
-import { loginAdmin, setToken } from "@/lib/api";
+import { loginAdmin, me, setToken } from "@/lib/api";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/Card";
@@ -27,7 +27,10 @@ export default function AdminLoginPage() {
     try {
       const r = await loginAdmin(email, passphrase);
       setToken(r.access_token, r.user_id);
-      router.push("/chat");
+      // Hidrata `is_admin` en localStorage para que NavBar sepa qué pestañas
+      // mostrar sin tener que esperar a un fetch posterior.
+      await me().catch(() => null);
+      router.push("/admin/monitor");
     } catch (err) {
       setError((err as Error).message);
     } finally {
