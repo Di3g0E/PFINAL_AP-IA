@@ -210,7 +210,14 @@ def _inject_fake_embedder_for_e1(tmp_path, monkeypatch):
     # Restablece la bandera `_HYBRID_DISABLED` del registrar entre tests
     from src.agents.registrar import agent as _reg_agent
     _reg_agent._HYBRID_DISABLED = False
+    # Limpia la cache del FinancialAnomalyDetector. Sin esto, un test que
+    # mockea `load_user_history_db_only` puede ver un detector entrenado
+    # con datos del test anterior (el cache se hace por user_id, y los
+    # tests reutilizan ids como 'not-a-uuid').
+    from src.agents.security import agent as _sec_agent
+    _sec_agent._DETECTOR_CACHE.clear()
     yield
     TransformerEmbedder.reset()
     PersonalClassifierRegistry.reset()
     HybridClassifier.reset()
+    _sec_agent._DETECTOR_CACHE.clear()

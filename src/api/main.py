@@ -110,6 +110,27 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     monitor_task = asyncio.create_task(_monitor_loop(), name="monitor_loop")
     logger.info("Monitor agent: background loop arrancado (intervalo 5 min)")
 
+    # Warm-up del pipeline OCR + clasificador en background. El primer
+    # /transactions/ocr-extract o /transactions hace cold-start de
+    # PaddleOCR (~5-10 s descargando modelos la primera vez) y del
+    # HybridClassifier. Lo precargamos sin bloquear el arranque del
+    # servidor; si falla, simplemente se hará en la primera request real.
+    async def _warm_up() -> None:
+        try:
+            def _do_warm_up():
+                from src.agents.registrar.ocr_engine_eur import EnrichedOCRExtractor
+                EnrichedOCRExtractor.shared()._base._ensure_ocr()
+                try:
+                    from src.agents.registrar.classifier_hybrid import HybridClassifier
+                    HybridClassifier.shared()
+                except Exception as e:
+                    logger.debug(f"warm-up del HybridClassifier saltado: {e}")
+            await asyncio.to_thread(_do_warm_up)
+            logger.info("Warm-up: PaddleOCR y clasificador listos.")
+        except Exception as e:
+            logger.warning(f"Warm-up falló (se hará lazy en la 1ª request): {e}")
+    asyncio.create_task(_warm_up(), name="warm_up")
+
     yield
 
     monitor_task.cancel()

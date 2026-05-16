@@ -16,7 +16,10 @@ from datetime import date
 from decimal import Decimal
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import (
+    APIRouter, BackgroundTasks, Depends, File, Form, HTTPException,
+    UploadFile, status,
+)
 from pydantic import BaseModel, Field
 
 from src.agents.contracts import ImageUpload, ManualEntry
@@ -114,6 +117,7 @@ def _record_to_out(record) -> TransactionRecordOut:
 )
 def add_manual(
     body: ManualTransactionRequest,
+    background_tasks: BackgroundTasks,
     user_id: str = Depends(get_current_user_id),
 ) -> ManualTransactionResponse:
     entry = ManualEntry(
@@ -124,7 +128,14 @@ def add_manual(
         type=body.type,
         area=body.area,
     )
-    result = registrar.add_manual_transaction(entry)
+    # Post-alta accepted: el entrenamiento online del PersonalClassifier y
+    # la invalidación del detector de anomalías se ejecutan TRAS devolver
+    # la respuesta (BackgroundTasks). Ahorra ~50-200 ms percibidos por el
+    # cliente sin pérdida funcional: la siguiente alta verá el modelo
+    # actualizado en cuanto el background task termine (~ms más tarde).
+    result = registrar.add_manual_transaction(
+        entry, schedule_background=background_tasks.add_task,
+    )
     return ManualTransactionResponse(
         accepted=[_record_to_out(r) for r in result.accepted],
         pending_review=[
@@ -320,9 +331,12 @@ def list_pending(
 )
 def confirm_pending(
     transaction_id: str,
+    background_tasks: BackgroundTasks,
     user_id: str = Depends(get_current_user_id),
 ) -> TransactionRecordOut:
-    result = registrar.confirm_pending(user_id, transaction_id)
+    result = registrar.confirm_pending(
+        user_id, transaction_id, schedule_background=background_tasks.add_task,
+    )
     if result.accepted:
         return _record_to_out(result.accepted[0])
 

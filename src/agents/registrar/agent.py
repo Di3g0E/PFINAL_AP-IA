@@ -44,7 +44,10 @@ from src.agents.registrar.ocr_engine_eur import (
     EnrichedOCRExtractor, generate_description,
 )
 from src.agents.registrar.preprocessing import preprocess_text
-from src.agents.tools import registrar_tools, security_tools
+# Antes importábamos `registrar_tools` y `security_tools` para invocar los
+# microservicios /modules/p2 y /modules/p5 vía HTTP loopback. Eso añadía
+# ~100-300ms por alta. Ahora todo se ejecuta in-process; los tools siguen
+# existiendo para que el orquestador LLM los use desde fuera del proceso.
 
 
 # Cargas perezosas de los recursos pesados
@@ -129,20 +132,14 @@ def classify_area_full(user_id: str, description: str) -> dict:
 
 
 def _classify_area(user_id: str, description: str) -> list[str]:
-    """Predice el campo Area vía tool REST `/modules/p2/classify-area`.
+    """Predice el campo Area in-process.
 
-    Mantiene firma `list[str]` por compatibilidad con el agente y los
-    tests. Si la llamada al tool falla por red/auth, se usa el híbrido
-    in-process (mismo resultado, sin túnel HTTP).
+    Antes esto pasaba por `registrar_tools.classify_area.invoke`, que abría
+    un round-trip HTTP loopback a `/modules/p2/classify-area` (httpx →
+    uvicorn → FastAPI routing → JWT decode → handler). Lo eliminamos: el
+    mismo resultado se obtiene llamando a `classify_area_full` en proceso
+    y ahorramos ~50-150 ms por alta.
     """
-    try:
-        areas = registrar_tools.classify_area.invoke({
-            "user_id": user_id, "description": description,
-        })
-        if areas:
-            return list(areas)
-    except Exception as e:
-        logger.warning(f"classify_area tool falló, usando fallback in-process: {e}")
     return classify_area_full(user_id, description)["area"]
 
 
@@ -174,34 +171,17 @@ def _record_confirmed_transaction(user_id: str, description: str,
 
 def _security_validate(draft: TransactionDraft) -> tuple[bool, list[str]]:
     """
-    Valida la transacción contra anomalías **vía tool REST** (P5).
+    Valida la transacción contra anomalías in-process.
 
-    Llama a `/modules/p5/validate-transaction` en lugar del agente Security
-    in-process. Si la llamada falla por red/auth, hace fallback al agente
-    local (la validación nunca queda "muda" — bloquearía altas legítimas).
+    Antes pasaba por `security_tools.validate_transaction.invoke`, que abría
+    un HTTP loopback a `/modules/p5/validate-transaction`. Lo eliminamos:
+    invocamos el agente Security directamente y ahorramos otros ~50-150 ms
+    por alta. La importación es tardía para evitar el ciclo registrar↔security.
 
     Devuelve (ok, reasons):
       - ok=True   → Security devolvió 'allow'. Persistir.
       - ok=False  → Security devolvió 'challenge'/'deny'. Encolar para revisión.
     """
-    try:
-        verdict = security_tools.validate_transaction.invoke({
-            "user_id": draft.user_id,
-            "description": draft.description,
-            "date": draft.date,
-            "amount": float(draft.amount),
-            "area": list(draft.area),
-            "type": draft.type,
-            "source": draft.source,
-            "currency": draft.currency,
-        })
-        if verdict.decision == "allow":
-            return True, []
-        return False, verdict.anomaly_reasons or [verdict.reason]
-    except Exception as e:
-        logger.warning(f"validate_transaction tool falló, fallback in-process: {e}")
-
-    # Fallback in-process (importación tardía para evitar ciclo registrar↔security)
     from src.agents.security import agent as security_agent
     verdict = security_agent.validate_transaction(draft)
     if verdict.decision == "allow":
@@ -291,8 +271,19 @@ def _persist_in_memory(
 
 # Operaciones expuestas al Orquestador
 
-def add_manual_transaction(entry: ManualEntry) -> RegistryResult:
-    """Alta manual: clasifica si falta area, valida y persiste."""
+def add_manual_transaction(
+    entry: ManualEntry,
+    *,
+    schedule_background: Optional[callable] = None,  # type: ignore[valid-type]
+) -> RegistryResult:
+    """Alta manual: clasifica si falta area, valida y persiste.
+
+    `schedule_background` es opcional. Cuando el endpoint FastAPI nos lo pasa
+    (`BackgroundTasks.add_task`), el entrenamiento incremental del
+    PersonalClassifier y la invalidación de cache se ejecutan DESPUÉS de
+    devolver la respuesta al cliente. Si es `None` (tests, llamadas
+    internas del orquestador) lo hacemos en el mismo turno, como antes.
+    """
     area = entry.area or _classify_area(entry.user_id, entry.description)
 
     draft = TransactionDraft(
@@ -315,11 +306,43 @@ def add_manual_transaction(entry: ManualEntry) -> RegistryResult:
         ])
 
     record = _persist(draft, status="accepted")
-    _record_confirmed_transaction(entry.user_id, entry.description, area)
+    _after_accepted(entry.user_id, entry.description, area,
+                    schedule_background=schedule_background)
     return RegistryResult(accepted=[record])
 
 
-def add_from_image(upload: ImageUpload) -> RegistryResult:
+def _after_accepted(user_id: str, description: str, area: list[str],
+                    *, schedule_background=None) -> None:
+    """Trabajo post-INSERT que NO debe bloquear la respuesta al cliente.
+
+    Entrena incrementalmente el PersonalClassifier con la descripción
+    confirmada (E1).
+
+    Nota: NO invalidamos la cache del FinancialAnomalyDetector. Hacerlo
+    en cada `accepted` mataría el beneficio del cache durante bursts
+    (el usuario añade 5 transacciones seguidas y la cache se regeneraba
+    en cada una). El TTL de 5 min en `security.agent._DETECTOR_TTL_SECONDS`
+    es suficiente: una transacción aislada no cambia el patrón estadístico
+    de un usuario con 100+ filas de histórico de forma relevante.
+
+    Si `schedule_background` está disponible, lo hacemos en background;
+    si no, inline. Cualquier excepción se traga: una alta legítima no
+    puede fallar por un fallo de entrenamiento.
+    """
+    def _run():
+        _record_confirmed_transaction(user_id, description, area)
+
+    if schedule_background is not None:
+        schedule_background(_run)
+    else:
+        _run()
+
+
+def add_from_image(
+    upload: ImageUpload,
+    *,
+    schedule_background: Optional[callable] = None,  # type: ignore[valid-type]
+) -> RegistryResult:
     """Alta desde imagen con OCR enriquecido (E2).
 
     Pipeline:
@@ -388,7 +411,8 @@ def add_from_image(upload: ImageUpload) -> RegistryResult:
         ])
 
     record = _persist(draft, status="accepted", extra_metadata=extra_meta)
-    _record_confirmed_transaction(upload.user_id, description, area)
+    _after_accepted(upload.user_id, description, area,
+                    schedule_background=schedule_background)
     return RegistryResult(accepted=[record])
 
 
@@ -492,7 +516,11 @@ def list_pending_reviews(user_id: str) -> RegistryResult:
     return RegistryResult(pending_review=items)
 
 
-def confirm_pending(user_id: str, transaction_id: str) -> RegistryResult:
+def confirm_pending(
+    user_id: str, transaction_id: str,
+    *,
+    schedule_background: Optional[callable] = None,  # type: ignore[valid-type]
+) -> RegistryResult:
     """
     El usuario aprueba una transacción pendiente: status='pending' → 'accepted'.
     A partir de ese momento contabiliza en analytics y se usa como muestra
@@ -501,8 +529,9 @@ def confirm_pending(user_id: str, transaction_id: str) -> RegistryResult:
     record_or_error = _update_pending_status(user_id, transaction_id, "accepted")
     if isinstance(record_or_error, str):
         return RegistryResult(rejected=[RejectedItem(reason=record_or_error)])
-    _record_confirmed_transaction(
+    _after_accepted(
         user_id, record_or_error.description, record_or_error.area,
+        schedule_background=schedule_background,
     )
     return RegistryResult(accepted=[record_or_error])
 

@@ -51,6 +51,47 @@ from src.utils.security import AccessController, EncryptedEmbeddingStore
 _EMBEDDING_STORE: Optional[EncryptedEmbeddingStore] = None
 _ACCESS_CONTROLLER = AccessController(max_attempts=5, lockout_seconds=300)
 
+# Cache del FinancialAnomalyDetector por usuario.
+# Antes lo re-instanciaba (carga histórico + entrena IsolationForest) en CADA
+# alta, lo cual con 887 transacciones (caso real de d.esclarin) tardaba
+# ~100-300 ms cada vez. Ahora cacheamos por user_id con TTL e invalidamos
+# cuando hay un alta accepted (vía `invalidate_anomaly_detector`).
+_DETECTOR_CACHE: dict[str, tuple[float, "FinancialAnomalyDetector"]] = {}
+_DETECTOR_TTL_SECONDS: float = 300.0  # 5 min — balance entre frescura y latencia
+
+
+def invalidate_anomaly_detector(user_id: str) -> None:
+    """Fuerza recargar el detector de este usuario en la próxima validación.
+
+    El Registrar la invoca tras cada INSERT `accepted` para que la siguiente
+    transacción se valide contra el histórico ya actualizado. Las altas
+    `pending` no la invalidan: no entran al histórico de entrenamiento.
+    """
+    _DETECTOR_CACHE.pop(user_id, None)
+
+
+def _get_anomaly_detector(user_id: str) -> Optional["FinancialAnomalyDetector"]:
+    """Devuelve un detector listo para `.predict()`. None si no hay histórico.
+
+    Cache: por `user_id`, TTL de 5 min. Cualquier alta `accepted` invalida
+    la entrada explícitamente, así que el TTL solo cubre cambios de fuera
+    de banda (CSV reload, scripts admin, etc.).
+    """
+    import time
+    cached = _DETECTOR_CACHE.get(user_id)
+    if cached is not None:
+        fitted_at, detector = cached
+        if time.monotonic() - fitted_at < _DETECTOR_TTL_SECONDS:
+            return detector
+
+    df = load_user_history_db_only(user_id)
+    if df.empty:
+        return None
+
+    detector = FinancialAnomalyDetector(df)
+    _DETECTOR_CACHE[user_id] = (time.monotonic(), detector)
+    return detector
+
 
 def _format_db_error(e: Exception) -> str:
     """
@@ -148,9 +189,8 @@ def validate_transaction(
     - decision='challenge' si una o más reglas la marcan: el Registrar
       debe encolarla en `pending_review` para que el usuario confirme.
     """
-    df = load_user_history_db_only(draft.user_id)
-
-    if df.empty:
+    detector = _get_anomaly_detector(draft.user_id)
+    if detector is None:
         logger.debug(
             f"validate_transaction: sin histórico para {draft.user_id}; allow por defecto"
         )
@@ -160,7 +200,6 @@ def validate_transaction(
             reason="Sin histórico para validar; aceptada por defecto.",
         )
 
-    detector = FinancialAnomalyDetector(df)
     is_anomalous, reasons = detector.predict(
         date=draft.date,
         amount=float(draft.amount),
