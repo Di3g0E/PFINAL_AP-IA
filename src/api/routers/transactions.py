@@ -187,13 +187,26 @@ def list_transactions(
     limit: int = 50,
     user_id: str = Depends(get_current_user_id),
 ) -> list[TransactionRecordOut]:
-    from src.database.session import get_session
-    from src.database.models import Transaction
+    from src.data.session import get_session
+    from src.data.schema import Transaction
     from sqlalchemy import select
     with get_session() as session:
         stmt = select(Transaction).where(Transaction.user_id == user_id).order_by(Transaction.date.desc()).limit(limit)
         records = session.execute(stmt).scalars().all()
-        return [_record_to_out(r) for r in records]
+        return [
+            TransactionRecordOut(
+                id=str(r.id),
+                description=r.description,
+                date=r.date,
+                amount=r.amount,
+                currency=r.currency,
+                area=r.area,
+                type=r.type,
+                source=r.source,
+                status=r.status,
+            )
+            for r in records
+        ]
 
 
 @router.get(

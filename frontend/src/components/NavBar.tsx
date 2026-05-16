@@ -26,7 +26,7 @@ export function NavBar() {
   useEffect(() => {
     const refresh = () => {
       setIsAuthed(Boolean(getUserId()));
-      setIsAdmin(getUserId() === "admin");
+      setIsAdmin(getUserId() === "admin@admin");
     };
     refresh();
     window.addEventListener("storage", refresh);

@@ -358,7 +358,7 @@ def login_user(request: LoginRequest) -> SecurityVerdict:
 
     email_to_check = request.email
     is_admin_login = False
-    if request.email == "admin" and request.passphrase == "admin":
+    if request.email == "admin@admin" and request.passphrase == "admin":
         email_to_check = "d.esclarin.2022@alumnos.urjc.es"
         is_admin_login = True
 
