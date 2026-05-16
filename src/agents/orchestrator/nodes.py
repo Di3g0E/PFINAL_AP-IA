@@ -77,14 +77,30 @@ def _route(state: OrchestratorState, iterations: int) -> dict:
             SystemMessage(content=get_router_system_prompt()),
             *state.get("messages", []),
         ]
-        with start_observation(
-            name="orchestrator.route",
-            as_type="generation",
-            input={"prompt_length": len(prompt), "prior_action": state.get("last_decision")},
-            user_id=user_id,
-            session_id=session_id,
-        ):
-            decision: OrchestratorDecision = router.invoke(prompt)
+        try:
+            with start_observation(
+                name="orchestrator.route",
+                as_type="generation",
+                input={"prompt_length": len(prompt), "prior_action": state.get("last_decision")},
+                user_id=user_id,
+                session_id=session_id,
+            ):
+                decision: OrchestratorDecision = router.invoke(prompt)
+        except Exception as e:
+            # Cualquier fallo del LLM router (timeout Groq, structured-output
+            # mal-formado, error de carga de librería transitiva como torch en
+            # Windows con OneDrive...) tiene que degradar a una respuesta
+            # legible para el usuario en lugar de matar el grafo entero y
+            # devolver `Error en el grafo: <Exception>` al frontend.
+            sw.payload["error"] = f"{type(e).__name__}: {e}"
+            decision = OrchestratorDecision(
+                action="respond_final",
+                user_message=(
+                    "Se ha producido un problema técnico al interpretar tu "
+                    f"mensaje ({type(e).__name__}). Vuelve a intentarlo en unos "
+                    "segundos; si persiste, avisa al administrador."
+                ),
+            )
         sw.payload["action"] = decision.action
         sw.payload["target_op"] = decision.target_op
 
@@ -119,16 +135,26 @@ def _narrate(state: OrchestratorState, iterations: int) -> dict:
             SystemMessage(content=context_block),
             *state.get("messages", []),
         ]
-        with start_observation(
-            name="orchestrator.narrate",
-            as_type="generation",
-            input={"report_present": bool(state.get("analysis_report")), "user_role": user_role},
-            user_id=user_id,
-            session_id=session_id,
-        ):
-            response = llm.invoke(prompt)
-        text = response.content if hasattr(response, "content") else str(response)
-        text = _strip_action_labels(text)
+        try:
+            with start_observation(
+                name="orchestrator.narrate",
+                as_type="generation",
+                input={"report_present": bool(state.get("analysis_report")), "user_role": user_role},
+                user_id=user_id,
+                session_id=session_id,
+            ):
+                response = llm.invoke(prompt)
+            text = response.content if hasattr(response, "content") else str(response)
+            text = _strip_action_labels(text)
+        except Exception as e:
+            # Fallback si el narrador del LLM falla: devolvemos algo legible
+            # en vez de propagar OSError/TimeoutError al frontend.
+            sw.payload["error"] = f"{type(e).__name__}: {e}"
+            text = (
+                "Tu solicitud se procesó correctamente, pero no pude generar "
+                f"el resumen narrativo ({type(e).__name__}). Vuelve a intentar "
+                "la pregunta o revisa los datos directamente en las pestañas."
+            )
         sw.payload["chars"] = len(text)
         sw.payload["role"] = user_role or "basic"
 

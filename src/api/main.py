@@ -110,25 +110,26 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     monitor_task = asyncio.create_task(_monitor_loop(), name="monitor_loop")
     logger.info("Monitor agent: background loop arrancado (intervalo 5 min)")
 
-    # Warm-up del pipeline OCR + clasificador en background. El primer
-    # /transactions/ocr-extract o /transactions hace cold-start de
-    # PaddleOCR (~5-10 s descargando modelos la primera vez) y del
-    # HybridClassifier. Lo precargamos sin bloquear el arranque del
-    # servidor; si falla, simplemente se hará en la primera request real.
+    # Warm-up SOLO de PaddleOCR. El primer /transactions/ocr-extract hace
+    # cold-start (~5-10 s descargando modelos la primera vez), lo
+    # precargamos sin bloquear el arranque del servidor.
+    #
+    # ¡No precargamos el HybridClassifier aquí! En Windows + OneDrive
+    # `sentence-transformers → torch` falla al cargar `shm.dll` cuando
+    # se inicializa en un thread auxiliar (`[WinError 127]`), y eso
+    # envenena el módulo torch para el resto del proceso, rompiendo el
+    # nodo orchestrator.route del grafo. El HybridClassifier se carga
+    # lazy en la primera request real, donde sí tiene el escudo
+    # `_HYBRID_DISABLED` para caer al clasificador legacy si falla.
     async def _warm_up() -> None:
         try:
             def _do_warm_up():
                 from src.agents.registrar.ocr_engine_eur import EnrichedOCRExtractor
                 EnrichedOCRExtractor.shared()._base._ensure_ocr()
-                try:
-                    from src.agents.registrar.classifier_hybrid import HybridClassifier
-                    HybridClassifier.shared()
-                except Exception as e:
-                    logger.debug(f"warm-up del HybridClassifier saltado: {e}")
             await asyncio.to_thread(_do_warm_up)
-            logger.info("Warm-up: PaddleOCR y clasificador listos.")
+            logger.info("Warm-up: PaddleOCR listo.")
         except Exception as e:
-            logger.warning(f"Warm-up falló (se hará lazy en la 1ª request): {e}")
+            logger.warning(f"Warm-up de OCR falló (se hará lazy en la 1ª request): {e}")
     asyncio.create_task(_warm_up(), name="warm_up")
 
     yield
