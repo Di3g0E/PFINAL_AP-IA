@@ -5,7 +5,7 @@ las peticiones más frecuentes: registro, login y envío de mensajes al chat.
 
 ## Cómo lanzarlos
 
-Necesitas **dos terminales**:
+Se necesitan **dos terminales**:
 
 ```bash
 # Terminal 1 — arranca el backend
@@ -15,9 +15,9 @@ uvicorn src.api.main:app --host 0.0.0.0 --port 8000
 locust -f tests/stress/locustfile.py --host http://localhost:8000
 ```
 
-Abre <http://localhost:8089> y configura:
+Abrir <http://localhost:8089> y configurar:
 
-- **Number of users**: empieza con 10 e ir subiendo.
+- **Number of users**: empezar con 10 e ir subiendo.
 - **Spawn rate**: 2 usuarios/segundo es razonable.
 
 ### Modo headless (sin UI)
@@ -25,8 +25,7 @@ Abre <http://localhost:8089> y configura:
 Para CI o pruebas rápidas:
 
 ```bash
-locust -f tests/stress/locustfile.py --host http://localhost:8000 \
-       --users 10 --spawn-rate 2 --run-time 30s --headless
+locust -f tests/stress/locustfile.py --host http://localhost:8000 --users 10 --spawn-rate 2 --run-time 30s --headless
 ```
 
 Imprime un resumen al final con p50/p95/p99 de latencia y request/s.
@@ -44,7 +43,7 @@ Cada usuario se registra al arrancar (`on_start`) con un email único
 generado con UUID, así que se puede lanzar el mismo locustfile varias
 veces sin que choquen los registros.
 
-## Limitaciones conocidas
+## Limitaciones
 
 - **Biometría falsa**: los bytes de la foto son los mínimos para que la
   API no rechace por archivo vacío. El pipeline biométrico real lo
@@ -52,6 +51,6 @@ veces sin que choquen los registros.
 - **LLM real**: cada `POST /chat` consume tokens de Groq. No lanzar
   cargas grandes (>50 usuarios durante mucho rato) sin estar pendiente
   del rate limit del proveedor.
-- **BD compartida**: si no aíslas la BD entre runs, los emails se
-  acumulan. Para entornos limpios usa SQLite en `:memory:` o vacía la
+- **BD compartida**: si no se aíslan las BBDD entre runs, los emails se
+  acumulan. Para entornos limpios usar SQLite en `:memory:` o vaciar la
   tabla `users` antes.

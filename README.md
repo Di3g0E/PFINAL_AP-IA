@@ -1,14 +1,3 @@
----
-title: PFINAL AP-IA Backend
-emoji: 🤖
-colorFrom: blue
-colorTo: purple
-sdk: docker
-app_port: 7860
-pinned: false
-short_description: Sistema multiagente financiero (FastAPI + LangGraph)
----
-
 # PFINAL_AP-IA — Sistema multiagente financiero
 
 Asistente financiero conversacional construido sobre **LangGraph** con dos
@@ -31,7 +20,7 @@ configure). El frontend es **Next.js + Recharts**. La BD es **Postgres**
 PFINAL_AP-IA/
 ├── src/
 │   ├── agents/
-│   │   ├── orchestrator/   # Grafo LangGraph + router/narrator/conversational
+│   │   ├── orchestrator/   # Grafo LangGraph + router/narrador/conversacional
 │   │   ├── analyst/        # Analytics (P4) + predicción (P1)
 │   │   ├── registrar/      # OCR (P3) + clasificador (P2)
 │   │   ├── security/       # Biometría (P5) + anti-anomalías financieras
@@ -66,8 +55,12 @@ PFINAL_AP-IA/
 ├── tests/
 │   ├── test_*.py                   # 21 tests unitarios
 │   └── stress/                     # Tests de carga con Locust
-├── doc/                            # MEMORIA, prompts_aspect.md, evoluciones.md
-├── scripts/                        # init_db, eval, verify_langfuse, etc.
+├── doc/                            # MEMORIA, prompts_aspect, evoluciones, agent_contracts, TELEGRAM_SETUP, results/
+├── scripts/
+│   ├── init_db.py                  # Crea tablas + usuario demo + seed CSV
+│   ├── create_admin_user.py        # Crea cuenta con `is_admin=True`
+│   ├── transfer_demo_data.py       # Copia las transacciones demo a otro user
+│   └── eval/                       # Genera los baselines de `docs/results/*.json`
 └── requirements.txt
 ```
 
@@ -79,22 +72,31 @@ PFINAL_AP-IA/
 
 - Python 3.12 (recomendado [uv](https://github.com/astral-sh/uv))
 - Node 18+ y npm
+- **[Git LFS](https://git-lfs.com)** — los modelos ML (`models/*.joblib`,
+  `models/liveness_kaggle.pth`, ~78 MB) viajan por LFS. Sin él, `git clone`
+  baja punteros de 134 bytes y el backend falla al cargar el clasificador.
 - Cuentas gratuitas en: [Supabase](https://supabase.com) (BD),
   [Groq](https://console.groq.com) (LLM), [ngrok](https://ngrok.com) (túnel)
-- Opcional: [Langfuse Cloud](https://cloud.langfuse.com) (observabilidad)
+- [Langfuse Cloud](https://cloud.langfuse.com) — opcional, pero **muy
+  recomendado**: sin `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` el
+  backend arranca igual, pero el panel admin no podrá responder a
+  *"¿cuánto hemos gastado en tokens?"* (la tool `get_llm_usage` devuelve
+  `enabled=False`).
 
 ### Pasos
 
 ```bash
-# 1) Clonar y crear entorno virtual
-git clone https://github.com/Di3g0E/PFINAL_AP-IA.git
-cd PFINAL_AP-IA
+# 0) Una sola vez por máquina — habilitar Git LFS
+git lfs install
+# (después al clonar el repo, los modelos se descargan reales)
+
+# 1) Crear entorno virtual
 uv venv .venv --python 3.12
 uv pip install -r requirements.txt
 
 # 2) Variables de entorno
 cp .env.example .env
-# Edita .env y rellena:
+# Editar .env y rellenar:
 #   DATABASE_URL=postgresql+psycopg://postgres.<ref>:<PASS>@aws-0-<region>.pooler.supabase.com:6543/postgres
 #   MASTER_FERNET_KEY=<la salida del comando de abajo>
 #   EMBEDDING_STORE_PASSPHRASE=<cualquier string >=32 chars>
@@ -104,13 +106,18 @@ cp .env.example .env
 # Generar MASTER_FERNET_KEY:
 .venv/Scripts/python.exe -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 
-# 3) Crear tablas en Supabase
+# 3) Crear tablas en Supabase + usuario demo + seed CSV
 .venv/Scripts/python.exe scripts/init_db.py
 
 # 4) (Opcional) Crear un usuario admin para el chat de ops
 .venv/Scripts/python.exe scripts/create_admin_user.py admin@local.dev mi-passphrase-segura
 
-# 5) Frontend
+# 5) (Opcional, recomendado) Tras registrarte como usuario en la UI,
+#    copia las transacciones del usuario demo a tu cuenta para que el
+#    Analyst tenga datos con los que trabajar:
+.venv/Scripts/python.exe scripts/transfer_demo_data.py tu-email@example.com
+
+# 6) Frontend
 cd frontend
 npm install
 echo "NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000" > .env.local
@@ -127,14 +134,79 @@ cd ..
 cd frontend && npm run dev
 ```
 
-Abre <http://localhost:3000>. Comprueba el backend con
+Abrir <http://localhost:3000>. Comprobar el backend con
 `curl http://127.0.0.1:8000/`.
 
-### Ejecutar repetidamente (workflow diario)
 
-Mismas dos terminales del bloque anterior. Para cerrar: `Ctrl+C` en
-cada una. Cambios en `.env` requieren reiniciar uvicorn manualmente
-(`--reload` solo vigila código Python).
+---
+
+## Despliegue con Vercel + Supabase
+
+Arquitectura del setup en producción:
+
+```
+[Navegador] → [Vercel · Next.js] → [ngrok tunnel] → [uvicorn local:8000]
+                                                         ↓
+                                                 [Supabase · Postgres]
+```
+
+Supabase ya hospeda la BD del paso 2 del setup local; añadir **ngrok**
+para exponer el backend local a internet y **Vercel** para servir el frontend.
+
+### 1. Túnel público con ngrok
+
+```bash
+# Una sola vez: configurar authtoken
+ngrok config add-authtoken <TOKEN>
+
+# En el dashboard de ngrok → Domains → New Domain da uno estático
+# como `mi-app.ngrok-free.dev` que no cambia entre reinicios.
+
+# Lanzar el túnel (Terminal 3 — además del backend y el frontend)
+ngrok http --domain=aware-uncoiled-raffle.ngrok-free.dev 8000
+```
+
+Comprobar: `curl https://aware-uncoiled-raffle.ngrok-free.dev/` debe devolver el mismo
+JSON que `http://127.0.0.1:8000/`.
+
+### 2. Frontend en Vercel
+
+1. Subir el repo a GitHub.
+2. <https://vercel.com> → **Import Project** → seleccionar el repo →
+   **Root Directory** = `frontend/`.
+3. En **Environment Variables** añadir:
+
+   ```
+   NEXT_PUBLIC_API_BASE_URL = https://aware-uncoiled-raffle.ngrok-free.dev
+   ```
+4. **Deploy**. Vercel devuelve una URL tipo
+   `https://pfinal-ap-ia.vercel.app`.
+
+### 3. Actualizar CORS en el backend
+
+Añadir el dominio de Vercel a `CORS_ORIGINS` en el `.env` local
+**(separado por coma, sin barra final)** y **reinicia uvicorn**:
+
+```
+CORS_ORIGINS=http://localhost:3000,https://pfinal-ap-ia.vercel.app
+```
+
+### 4. Workflow diario con Vercel
+
+```bash
+# Terminal 1 — backend
+.venv/Scripts/python.exe -m uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
+
+# Terminal 2 — túnel ngrok (URL estable)
+ngrok http --domain=aware-uncoiled-raffle.ngrok-free.dev 8000
+```
+
+Ya no es necesario `npm run dev`: el frontend lo sirve Vercel. Cualquier
+push a `main` redespliega el frontend automáticamente.
+
+> ⚠️ Si se cambia de dominio ngrok, se debe actualizar `NEXT_PUBLIC_API_BASE_URL`
+> en Vercel **y** `CORS_ORIGINS` en el `.env` local. Por eso es importante
+> tener un dominio estático ngrok.
 
 ---
 
@@ -174,12 +246,12 @@ Estos prompts cubren cada delegación al menos una vez:
 | 2 | `Añade un gasto de 18,50€ en pizza el 15 de abril` | registrar.add_manual_transaction |
 | 3 | `Adjunto factura del super` *(con imagen)* | registrar.add_from_image (OCR) |
 | 4 | `¿Cuánto he gastado este mes?` | analyst.monthly_summary |
-| 5 | `Reparte mis gastos por categoría del último trimestre` | analyst.category_breakdown |
+| 5 | `Quiero ahorrar 500€ al mes en ocio` | analyst.set_goal |
 | 6 | `Muéstrame mis gastos mensuales en gráfico de líneas` | analyst.spending_trends (con chart XAI) |
 | 7 | `¿Cuánto voy a gastar el mes que viene en comida?` | analyst.predict_next_month |
 | 8 | `Detecta movimientos raros en mis transacciones` | analyst.detect_anomalies |
-| 9 | `Quiero ahorrar 500€ al mes en ocio` | analyst.set_goal |
-| 10 | `Cambia mi perfil a avanzado` *(después: pídele otro resumen)* | role basic → advanced (cambia el tono del narrator) |
+| 9 | `Cambia mi perfil a avanzado` *(después: pídele otro resumen)* | role basic → advanced (cambia el tono del narrator) |
+| 10 | `Reparte mis gastos por categoría del último trimestre` | analyst.category_breakdown |
 
 > 💡 La spec del chart se devuelve en `ChatResponse.chart`. Pídele
 > *"sin gráfico"* o *"en barras"* para verificar la visualización dinámica.
@@ -235,17 +307,34 @@ Necesita el backend levantado en otro terminal:
 .venv/Scripts/locust.exe -f tests/stress/locustfile.py --host http://localhost:8000
 
 # o modo headless (10 usuarios, 30s):
-.venv/Scripts/locust.exe -f tests/stress/locustfile.py --host http://localhost:8000 \
-    --users 10 --spawn-rate 2 --run-time 30s --headless
+.venv/Scripts/locust.exe -f tests/stress/locustfile.py --host http://localhost:8000 --users 10 --spawn-rate 2 --run-time 30s --headless
 ```
 
 Más detalle en [tests/stress/README.md](tests/stress/README.md).
+
+### Evaluaciones (baselines de las evoluciones P2 / P3 / P5)
+
+Los scripts de `scripts/eval/` regeneran los JSON de `docs/results/` que
+[doc/evoluciones.md](doc/evoluciones.md) cita como prueba cuantitativa
+del 20 % de mejora pedida por el enunciado:
+
+```bash
+# Accuracy del clasificador (P2) — produce docs/results/p2_baseline.json y p2_post.json
+.venv/Scripts/python.exe scripts/eval/eval_p2_classifier.py
+
+# OCR (P3) — sobre CORD y sobre facturas en euros
+.venv/Scripts/python.exe scripts/eval/eval_p3_ocr.py
+
+# Biometría (P5) — accuracy, FAR/FRR
+.venv/Scripts/python.exe scripts/eval/eval_p5_biometrics.py
+```
 
 ---
 
 ## Documentación adicional
 
-- **Memoria del proyecto:** [doc/MEMORIA.md](doc/MEMORIA.md)
 - **Evoluciones incrementales (P2, P3, P5):** [doc/evoluciones.md](doc/evoluciones.md)
 - **Metodología de prompts (ASPECCT):** [doc/prompts_aspect.md](doc/prompts_aspect.md)
+- **Contratos de los sub-agentes:** [doc/agent_contracts.md](doc/agent_contracts.md)
+- **Notificaciones Telegram (opcional):** [docs/TELEGRAM_SETUP.md](docs/TELEGRAM_SETUP.md)
 - **API interactiva:** Swagger UI en `http://127.0.0.1:8000/docs`
