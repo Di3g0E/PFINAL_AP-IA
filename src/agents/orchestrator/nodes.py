@@ -36,7 +36,7 @@ from src.agents.orchestrator.prompts import (
 )
 from src.agents.orchestrator.state import MAX_ITERATIONS, OrchestratorState
 from src.agents.tools import analyst_tools, registrar_tools, security_tools
-from src.utils.langfuse_integration import start_observation
+from src.utils.langfuse_integration import get_langfuse_callbacks, start_observation
 from src.utils.logging_config import Stopwatch, log_event
 
 
@@ -85,7 +85,13 @@ def _route(state: OrchestratorState, iterations: int) -> dict:
                 user_id=user_id,
                 session_id=session_id,
             ):
-                decision: OrchestratorDecision = router.invoke(prompt)
+                # `callbacks` captura tokens, modelo y coste en Langfuse.
+                # Si Langfuse está apagado, la lista viene vacía y NO
+                # pasamos `config=` para no acoplarnos a `Runnable.invoke`
+                # (los fakes de los tests usan firmas más simples).
+                cb = get_langfuse_callbacks()
+                _kw = {"config": {"callbacks": cb}} if cb else {}
+                decision: OrchestratorDecision = router.invoke(prompt, **_kw)
         except Exception as e:
             # Cualquier fallo del LLM router (timeout Groq, structured-output
             # mal-formado, error de carga de librería transitiva como torch en
@@ -143,7 +149,9 @@ def _narrate(state: OrchestratorState, iterations: int) -> dict:
                 user_id=user_id,
                 session_id=session_id,
             ):
-                response = llm.invoke(prompt)
+                cb = get_langfuse_callbacks()
+                _kw = {"config": {"callbacks": cb}} if cb else {}
+                response = llm.invoke(prompt, **_kw)
             text = response.content if hasattr(response, "content") else str(response)
             text = _strip_action_labels(text)
         except Exception as e:
@@ -413,7 +421,9 @@ def conversational_node(state: OrchestratorState) -> dict:
                 user_id=user_id,
                 session_id=session_id,
             ):
-                response = llm.invoke(prompt)
+                cb = get_langfuse_callbacks()
+                _kw = {"config": {"callbacks": cb}} if cb else {}
+                response = llm.invoke(prompt, **_kw)
             text = response.content if hasattr(response, "content") else str(response)
             text = _strip_action_labels(text)
         except Exception as e:

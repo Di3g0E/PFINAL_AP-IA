@@ -44,6 +44,11 @@ langchain-groq>=0.2.0
 langchain-openai>=0.2.10
 langchain-anthropic>=0.3.0
 langchain-google-genai>=2.0.0
+# `langchain` (meta-package) lo necesita la integración Langfuse↔Langchain
+# (`langfuse.langchain.CallbackHandler`) para capturar tokens/coste/modelo
+# automáticamente en cada `llm.invoke(...)`. Sin él los callbacks no se
+# inicializan y `meta.langfuse` del panel admin sale con cost=0/tokens=0.
+langchain>=0.3
 langfuse>=4.6.1
 
 # --- OCR — Agente Registrador (P3) ---
@@ -87,7 +92,10 @@ python-dotenv>=1.0.0
 PyYAML>=6.0
 loguru>=0.7.0
 tqdm>=4.66.0
-networkx>=3.1
+# graphviz: render DOT → PNG/SVG. Binario del sistema opcional (si no está
+# instalado, los endpoints siguen sirviendo DOT/JSON pero el PNG falla con
+# 503). Suficiente para una memoria con el grafo agéntico inline.
+graphviz>=0.20
 
 # --- Dev / Testing ---
 pytest>=7.4.0

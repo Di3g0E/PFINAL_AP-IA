@@ -167,6 +167,59 @@ def start_observation(
         return nullcontext()
 
 
+def get_langfuse_callbacks() -> list[Any]:
+    """Devuelve la lista de callbacks Langfuse para pasar a `llm.invoke(config=...)`.
+
+    El `CallbackHandler` de Langfuse para Langchain captura automáticamente:
+      - Modelo usado (`provided_model_name`)
+      - Tokens de entrada y salida (`usage_details`)
+      - Coste calculado (`total_cost`)
+      - Latencia y `time_to_first_token`
+      - Errores del LLM (`level=ERROR` + `status_message`)
+
+    Devuelve una lista vacía cuando:
+      - Langfuse no está instalado
+      - `LANGFUSE_SECRET_KEY` no está configurada
+      - El paquete `langchain` no está instalado (la integración de Langfuse
+        con Langchain depende de él, pero el resto del proyecto solo usa
+        `langchain-core` — si falta no rompemos, simplemente desactivamos)
+
+    Los llamadores hacen::
+
+        callbacks = get_langfuse_callbacks()
+        config = {"callbacks": callbacks} if callbacks else None
+        response = llm.invoke(prompt, config=config)
+
+    Es seguro llamarlo en cada invocación: el constructor del handler es
+    barato (sin I/O) y crea estado local al run. Reutilizar instancias
+    entre invocaciones concurrentes podría mezclar run-ids en sus dicts
+    internos — preferimos uno por llamada.
+    """
+    if not LANGFUSE_AVAILABLE or not settings.langfuse_secret_key:
+        return []
+    _env_passthrough()
+    try:
+        from langfuse.langchain import CallbackHandler  # noqa: WPS433 (lazy import)
+    except (ImportError, ModuleNotFoundError) as exc:
+        # langchain meta-package ausente — la integración Langfuse↔Langchain
+        # no puede crearse, pero el resto del proyecto sigue funcionando.
+        # Avisamos UNA vez para no spamear los logs.
+        if not getattr(get_langfuse_callbacks, "_warned", False):
+            logger.warning(
+                "Langfuse-Langchain CallbackHandler no disponible: {}. "
+                "Las llamadas al LLM no reportarán tokens/coste a Langfuse. "
+                "Solución: `pip install langchain`.",
+                exc,
+            )
+            setattr(get_langfuse_callbacks, "_warned", True)
+        return []
+    try:
+        return [CallbackHandler()]
+    except Exception as exc:
+        logger.warning(f"No se pudo crear CallbackHandler de Langfuse: {exc}")
+        return []
+
+
 def propagate_user_context(
     user_id: str,
     session_id: str,

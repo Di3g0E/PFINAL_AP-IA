@@ -27,6 +27,10 @@ data/external/*
 # Logs
 logs/*.log
 
+# Artefactos generados por scripts ad-hoc (grafos en JSON, exports, etc.).
+artifacts/*
+!artifacts/.gitkeep
+
 # Datos biometricos cifrados (PII, no deben viajar al repo)
 data/face_embeddings.bin
 

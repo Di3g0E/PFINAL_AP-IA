@@ -28,6 +28,21 @@ import numpy as np
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _disable_langfuse_for_tests(monkeypatch):
+    """Langfuse OFF durante toda la suite.
+
+    Motivo: si las keys reales están en `.env` (lo habitual en local),
+    cada `llm.invoke(...)` con el CallbackHandler abriría conexiones a
+    cloud.langfuse.com — ralentiza la suite y ensucia el dashboard con
+    runs sintéticos. `get_langfuse_callbacks()` y `start_observation()`
+    ya manejan el caso "sin secret key" devolviendo lista vacía /
+    `nullcontext` respectivamente, así que vaciar el setting basta.
+    """
+    monkeypatch.setattr("src.utils.config.settings.langfuse_secret_key", "")
+    monkeypatch.setattr("src.utils.config.settings.langfuse_public_key", "")
+
+
 # Tablas de despacho path → callable. Se rellenan perezosamente para evitar
 # que el import de pytest arrastre todo el sistema (paddle, torch, etc.) hasta
 # el primer test que realmente lo necesita.

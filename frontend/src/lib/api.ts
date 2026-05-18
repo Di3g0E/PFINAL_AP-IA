@@ -501,6 +501,107 @@ export async function updateUserRole(role: UserRole): Promise<UserRole> {
 }
 
 
+// Grafo agéntico (vistas usuario y admin)
+
+export type AgentGraphNode = {
+  id: string;
+  agent: string;
+  role: "basic" | "advanced" | null;
+  count: number;
+  error_count: number;
+  error_rate: number;
+  avg_latency_ms: number | null;
+  users_distinct?: number;
+};
+
+export type AgentGraphEdge = {
+  source: string;
+  target: string;
+  count: number;
+  avg_latency_ms: number | null;
+};
+
+export type AgentGraph = {
+  nodes: AgentGraphNode[];
+  edges: AgentGraphEdge[];
+  meta: { total_events: number; total_sessions: number; fallback_role?: string | null };
+};
+
+export type UserAgentGraphResponse = {
+  generated_at: string;
+  window_hours: number;
+  role: UserRole | null;
+  graph: AgentGraph;
+};
+
+export type LangfuseSummary = {
+  enabled: boolean;
+  ok: boolean;
+  traces_count: number;
+  observations_count: number;
+  total_cost_usd: number;
+  total_tokens_in: number;
+  total_tokens_out: number;
+  models_used: { model: string; tokens_in: number; tokens_out: number; cost_usd: number }[];
+  top_trace_names: { name: string; count: number }[];
+  note: string | null;
+};
+
+export type LogAnomaly = {
+  kind: "volume" | "spike" | "repeated" | "critical";
+  severity: "info" | "warning" | "critical";
+  description: string;
+  sample_message: string | null;
+  occurrences: number;
+};
+
+export type LogAnalysisReport = {
+  window_hours: number;
+  lines_scanned: number;
+  lines_parsed: number;
+  counts_by_level: Record<string, number>;
+  top_modules_with_errors: { module: string; count: number }[];
+  top_repeated_messages: { message: string; count: number }[];
+  anomalies: LogAnomaly[];
+  note: string | null;
+};
+
+export type AdminAgentGraphResponse = {
+  generated_at: string;
+  window_hours: number;
+  graph: AgentGraph;
+  meta: {
+    langfuse: LangfuseSummary | null;
+    monitor: MonitoringReport | null;
+    logs: LogAnalysisReport | null;
+  };
+};
+
+export async function getMyAgentGraph(windowHours = 24): Promise<UserAgentGraphResponse> {
+  const res = await authedFetch(`/me/agent-graph?window_hours=${windowHours}`);
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+export async function getMyAgentGraphDot(windowHours = 24): Promise<string> {
+  const res = await authedFetch(`/me/agent-graph?window_hours=${windowHours}&format=dot`);
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.text();
+}
+
+export async function getAdminAgentGraph(windowHours = 24): Promise<AdminAgentGraphResponse> {
+  const res = await authedFetch(`/admin/agent-graph?window_hours=${windowHours}`);
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+export async function getAdminAgentGraphDot(windowHours = 24): Promise<string> {
+  const res = await authedFetch(`/admin/agent-graph?window_hours=${windowHours}&format=dot`);
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.text();
+}
+
+
 // Helpers de session_id en localStorage (clave: 'current_session_id').
 // Sirven para que al cambiar de pestaña Chat ↔ Pendientes se recupere
 // automáticamente la conversación abierta.

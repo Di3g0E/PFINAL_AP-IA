@@ -53,7 +53,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
 from src.api.routers import auth, chat, monitor as monitor_router, transactions, settings as settings_router
-from src.api.routers import admin_langfuse, langfuse
+from src.api.routers import admin_agent_graph, user_agent_graph
 from src.api.routers.modules import p1 as module_p1, p2 as module_p2, p3 as module_p3, p4 as module_p4, p5 as module_p5
 from src.utils.config import settings
 from src.utils.langfuse_integration import init_langfuse, shutdown_langfuse
@@ -170,23 +170,22 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS para que el frontend (Next.js) pueda consumir la API en desarrollo.
-# Compose a robust allowlist for local development (covers localhost and 127.0.0.1)
-local_dev_origins = [
+# CORS: allowlist explícita que combina los orígenes configurados (prod) con
+# localhost/127.0.0.1 para que dev funcione sin tocar .env. Mantenemos
+# `allow_credentials=True` por si en el futuro el frontend usa cookies; con
+# Bearer tokens también es compatible.
+_LOCAL_DEV_ORIGINS = [
     "http://localhost:3000",
     "http://localhost:3001",
     "http://127.0.0.1:3000",
     "http://127.0.0.1:3001",
 ]
-allow_origins_list = list(dict.fromkeys(settings.cors_origins_list + local_dev_origins))
+allow_origins_list = list(dict.fromkeys(settings.cors_origins_list + _LOCAL_DEV_ORIGINS))
 
-# Development fallback: allow any origin but do NOT allow credentials
-# (credentials + "*" is rejected by Starlette). This is safe for local dev
-# where the frontend uses Authorization headers rather than cookies.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=allow_origins_list,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -204,8 +203,8 @@ app.include_router(module_p2.router)
 app.include_router(module_p3.router)
 app.include_router(module_p4.router)
 app.include_router(module_p5.router)
-app.include_router(langfuse.router)
-app.include_router(admin_langfuse.router)
+app.include_router(user_agent_graph.router)
+app.include_router(admin_agent_graph.router)
 
 
 @app.get("/", tags=["health"], summary="Healthcheck")

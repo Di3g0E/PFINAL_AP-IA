@@ -80,6 +80,7 @@ export function NavBar() {
           ) : isAdmin ? (
             <>
               <Link href="/admin/monitor" className={linkCls("/admin/monitor")}>Monitor</Link>
+              <Link href="/admin/graph" className={linkCls("/admin/graph")}>Grafo</Link>
               <button
                 onClick={onLogout}
                 className="ml-1 px-2 py-1 rounded-md text-red-600 hover:bg-red-50 transition-colors"
@@ -92,6 +93,7 @@ export function NavBar() {
               <Link href="/chat" className={linkCls("/chat")}>Chat</Link>
               <Link href="/pending" className={linkCls("/pending")}>Pendientes</Link>
               <Link href="/records" className={linkCls("/records")}>Registros</Link>
+              <Link href="/graph" className={linkCls("/graph")}>Mi grafo</Link>
               <Link href="/settings" className={linkCls("/settings")}>Configuración</Link>
               <button
                 onClick={onLogout}
