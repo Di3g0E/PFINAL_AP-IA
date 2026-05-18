@@ -5,9 +5,9 @@ import { useRouter } from "next/navigation";
 
 import {
   clearToken, getAdminAgentGraph, getAdminAgentGraphDot, getIsAdmin,
-  type AdminAgentGraphResponse,
+  type AdminAgentGraphResponse, type AgentGraph,
 } from "@/lib/api";
-import { GraphView } from "@/components/GraphView";
+import { GraphView, agentGraphToDot } from "@/components/GraphView";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 
@@ -103,12 +103,37 @@ export default function AdminGraphPage() {
           {data && (
             <>
               <KpiRow data={data} />
-              <GraphView dot={dot} className="mt-2" />
+
+              <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                <div>
+                  <h3 className="mb-1 text-sm font-semibold text-slate-700">
+                    Grafo de aplicación
+                    <span className="ml-2 text-xs font-normal text-slate-500">
+                      orchestrator · analyst · registrar · security · …
+                    </span>
+                  </h3>
+                  <GraphView dot={dot} />
+                </div>
+                <div>
+                  <h3 className="mb-1 text-sm font-semibold text-slate-700">
+                    Grafo de operaciones
+                    <span className="ml-2 text-xs font-normal text-violet-600">
+                      admin_orchestrator · observability
+                    </span>
+                  </h3>
+                  <GraphView
+                    dot={agentGraphToDot(data.graph_ops, `System (ops) — last ${windowHours}h`)}
+                  />
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
                 <LangfuseCard data={data} />
                 <LogsCard data={data} />
               </div>
-              <NodesTable data={data} />
+
+              <NodesTable graph={data.graph_app} title="Detalle por agente (app)" />
+              <NodesTable graph={data.graph_ops} title="Detalle por agente (ops)" />
             </>
           )}
         </CardContent>
@@ -125,10 +150,12 @@ function KpiRow({ data }: { data: AdminAgentGraphResponse }) {
     monitor && monitor.total_events > 0
       ? `${(monitor.error_rate * 100).toFixed(1)}%`
       : "—";
+  const totalApp = data.graph_app.meta.total_events;
+  const totalOps = data.graph_ops.meta.total_events;
   return (
     <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-      <Kpi label="Eventos" value={data.graph.meta.total_events.toString()} />
-      <Kpi label="Sesiones" value={data.graph.meta.total_sessions.toString()} />
+      <Kpi label="Eventos app" value={totalApp.toString()} />
+      <Kpi label="Eventos ops" value={totalOps.toString()} />
       <Kpi label="Error rate" value={errorRate} />
       <Kpi
         label="Salud"
@@ -293,11 +320,11 @@ function LogsCard({ data }: { data: AdminAgentGraphResponse }) {
 }
 
 
-function NodesTable({ data }: { data: AdminAgentGraphResponse }) {
-  if (data.graph.nodes.length === 0) return null;
+function NodesTable({ graph, title }: { graph: AgentGraph; title: string }) {
+  if (graph.nodes.length === 0) return null;
   return (
     <div className="overflow-auto">
-      <h3 className="mb-2 text-sm font-semibold">Detalle por agente</h3>
+      <h3 className="mb-2 text-sm font-semibold">{title}</h3>
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b text-left text-xs uppercase text-slate-500">
@@ -310,8 +337,8 @@ function NodesTable({ data }: { data: AdminAgentGraphResponse }) {
           </tr>
         </thead>
         <tbody>
-          {data.graph.nodes.map((n) => (
-            <tr key={n.id} className="border-b">
+          {graph.nodes.map((n) => (
+            <tr key={n.id} className={`border-b ${n.is_ops ? "bg-violet-50" : ""}`}>
               <td className="py-1 font-mono">{n.agent}</td>
               <td>{n.count}</td>
               <td>{n.error_count}</td>

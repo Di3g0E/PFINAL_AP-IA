@@ -3,18 +3,23 @@
 Endpoint:
   GET /admin/agent-graph?window_hours=24&format=json|dot|png
 
-Combina tres fuentes:
+Devuelve **dos grafos** lado a lado:
 
-  1. **Tabla `events`** (todos los usuarios): aristas por encadenamiento
-     dentro de cada sesión, count y latencia por nodo/arista.
-  2. **Langfuse SaaS** (si configurado): observaciones (`SPAN` + `GENERATION`)
-     en la ventana, enriquece nodos con tokens y coste.
-  3. **MonitorAgent** + **analyzer del log file** (`logs/app.log`): se
-     incluyen en `meta.monitor` y `meta.logs` del payload para que el
-     frontend pinte KPIs + anomalías al lado del grafo.
+  - `graph_app`: solo agentes de aplicación (orchestrator, analyst,
+    registrar, security, conversational, api) — vista "¿qué hacen los
+    usuarios?".
+  - `graph_ops`: solo agentes del propio admin chat (`admin_orchestrator`,
+    `observability`) — vista "¿qué hago yo (admin)?".
+
+Plus `meta` con resúmenes de Langfuse SaaS, MonitorAgent y log file.
+
+Formatos:
+  - `json` (default): JSON con ambos grafos + meta.
+  - `dot` y `png` siguen exportando solo el grafo de aplicación, que es
+    el caso de uso primario para una memoria académica.
 
 Si Langfuse no está configurado, el campo `meta.langfuse.enabled` será
-false y el grafo se construye solo desde `events`. No es un error.
+false y los grafos se construyen solo desde `events`. No es un error.
 """
 from __future__ import annotations
 
@@ -38,17 +43,17 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 @router.get(
     "/agent-graph",
-    summary="Grafo agéntico system-wide (admin)",
+    summary="Grafos agénticos system-wide (app + ops) para admin",
 )
 def get_admin_agent_graph(
     window_hours: int = Query(24, ge=1, le=24 * 30),
     format: str = Query("json", pattern="^(json|dot|png)$"),
-    include_langfuse: bool = Query(True, description="Enriquecer con observaciones de Langfuse SaaS."),
+    include_langfuse: bool = Query(True, description="Enriquecer con resumen de Langfuse SaaS."),
     include_logs: bool = Query(True, description="Adjuntar análisis de logs/app.log."),
     include_monitor: bool = Query(True, description="Adjuntar snapshot de MonitorAgent."),
     _admin: str = Depends(require_admin),
 ):
-    """Solo para `is_admin=True`. Devuelve el grafo system-wide enriquecido."""
+    """Solo para `is_admin=True`. Devuelve los dos grafos + telemetría."""
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(hours=window_hours)
 
@@ -60,30 +65,29 @@ def get_admin_agent_graph(
             .all()
         )
 
-    langfuse_payload = None
-    if include_langfuse:
-        langfuse_payload = fetch_summary(from_time=cutoff, to_time=now, limit=500)
-
-    # El grafo se construye SOLO desde `events` porque las observaciones de
-    # Langfuse en este proyecto no llevan `name` por observación (la
-    # instrumentación nombra el trace raíz como `chat.request` pero no las
-    # sub-observaciones). Mezclarlas en el grafo introducía nodos
-    # `langfuse:None` sin valor. El resumen Langfuse (coste, tokens,
-    # modelos, traces por nombre) va en `meta.langfuse`.
-    graph = build_admin_agent_graph(events)
+    # Particionamos UNA vez la lista de eventos en {app, ops}. El builder
+    # también sabe filtrar, pero pasarle ya filtrado evita iterar dos veces.
+    graph_app = build_admin_agent_graph(events, kind="app")
+    graph_ops = build_admin_agent_graph(events, kind="ops")
 
     if format == "dot":
-        dot = graph_to_dot(graph, title=f"System — last {window_hours}h")
+        # DOT/PNG solo del grafo de aplicación — el ops es secundario y
+        # se renderiza desde el JSON en el frontend.
+        dot = graph_to_dot(graph_app, title=f"System (app) — last {window_hours}h")
         return Response(content=dot, media_type="text/vnd.graphviz")
     if format == "png":
         try:
-            png = graph_to_png(graph, title=f"System — last {window_hours}h")
+            png = graph_to_png(graph_app, title=f"System (app) — last {window_hours}h")
         except RuntimeError as exc:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=str(exc),
             ) from exc
         return Response(content=png, media_type="image/png")
+
+    langfuse_payload = None
+    if include_langfuse:
+        langfuse_payload = fetch_summary(from_time=cutoff, to_time=now, limit=500)
 
     monitor_payload = None
     if include_monitor:
@@ -99,7 +103,8 @@ def get_admin_agent_graph(
     return {
         "generated_at": now.isoformat(),
         "window_hours": window_hours,
-        "graph": graph,
+        "graph_app": graph_app,
+        "graph_ops": graph_ops,
         "meta": {
             "langfuse": langfuse_payload,
             "monitor": monitor_payload,

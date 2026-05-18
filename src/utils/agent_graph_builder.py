@@ -149,11 +149,32 @@ def build_user_agent_graph(
 # ---------------------------------------------------------------------------
 
 
-def build_admin_agent_graph(events: Iterable[Event]) -> dict[str, Any]:
+# Agentes que pertenecen al "chat de operaciones" del admin. Cuando un
+# admin pregunta al sistema sobre sí mismo (panel `/admin/chat`), genera
+# eventos con estos `agent` names. El filtro `kind` los aísla del grafo
+# de aplicación.
+OPS_AGENTS: frozenset[str] = frozenset({"admin_orchestrator", "observability"})
+
+
+def is_ops_agent(agent_name: str) -> bool:
+    """¿El agente forma parte del flujo de observabilidad del admin?"""
+    return agent_name in OPS_AGENTS
+
+
+def build_admin_agent_graph(
+    events: Iterable[Event],
+    *,
+    kind: str = "all",
+) -> dict[str, Any]:
     """Grafo system-wide. No diferencia por rol.
 
     Args:
         events: eventos de TODOS los usuarios en la ventana.
+        kind: filtro por familia de agentes.
+          - `"app"` → excluye agentes de ops (`admin_orchestrator`,
+            `observability`). Esta es la vista "¿qué hacen los usuarios?".
+          - `"ops"` → solo agentes de ops. Vista "¿qué hago yo (admin)?".
+          - `"all"` → sin filtro (legacy, mezcla todo).
 
     Returns:
         Dict `{nodes, edges, meta}`. La estructura es la misma que la del
@@ -161,15 +182,24 @@ def build_admin_agent_graph(events: Iterable[Event]) -> dict[str, Any]:
           - Los nodos no llevan etiqueta de rol.
           - Cada nodo trae `users_distinct` (cuántos usuarios distintos
             han pasado por ese agente en la ventana).
+          - Se añade `meta.kind` para que el frontend pueda renderizar
+            cabecera y colores acorde.
 
     El enriquecimiento con métricas de Langfuse (coste, tokens, modelos)
     se hace al margen del grafo, en `meta.langfuse` del endpoint admin
     — las observaciones de Langfuse del proyecto no traen `name` por
     observación, así que mezclarlas en el grafo introducía nodos
-    fantasma. Para evolucionar a futuro: instrumentar cada `@observe`
-    con un `name` mapeable a un agente y reintroducir el merge aquí.
+    fantasma.
     """
-    events = list(events)
+    if kind not in ("app", "ops", "all"):
+        raise ValueError(f"kind debe ser 'app'|'ops'|'all', no {kind!r}")
+
+    if kind == "app":
+        events = [e for e in events if not is_ops_agent(e.agent)]
+    elif kind == "ops":
+        events = [e for e in events if is_ops_agent(e.agent)]
+    else:
+        events = list(events)
 
     nodes: dict[str, dict[str, Any]] = {}
     edges: dict[tuple[str, str], dict[str, Any]] = {}
@@ -220,6 +250,7 @@ def build_admin_agent_graph(events: Iterable[Event]) -> dict[str, Any]:
         "meta": {
             "total_events": len(events),
             "total_sessions": len(sessions),
+            "kind": kind,
         },
     }
 
@@ -238,6 +269,11 @@ def _finalize_node(node: dict[str, Any]) -> dict[str, Any]:
     out = {
         "id": node["id"],
         "agent": node["agent"],
+        # Marca de familia: 'ops' para `admin_orchestrator`/`observability`,
+        # 'app' para el resto. El frontend y el DOT renderer lo usan para
+        # colorear distinto y que un usuario/admin pueda distinguir su
+        # propio flujo de ops del flujo de aplicación a primera vista.
+        "is_ops": is_ops_agent(node["agent"]),
         "role": node.get("role"),
         "count": count,
         "error_count": error_count,
@@ -306,11 +342,18 @@ def graph_to_dot(graph: dict[str, Any], *, title: str = "Agent Graph") -> str:
 
 
 def _node_color(node: dict[str, Any]) -> str:
+    # Prioridad 1: errores (siempre dominante visualmente).
     err = node.get("error_rate") or 0.0
     if err >= 0.20:
         return "#fca5a5"  # rojo
     if err >= 0.05:
         return "#fde68a"  # amarillo
+    # Prioridad 2: agentes de ops → morado, para que un admin mirando
+    # `/me/agent-graph` o `/admin/agent-graph?kind=all` distinga al
+    # instante su flujo de debug del flujo de aplicación.
+    if node.get("is_ops"):
+        return "#ddd6fe"  # morado claro
+    # Prioridad 3: rol del usuario (solo aplica a la vista user).
     role = node.get("role")
     if role == "advanced":
         return "#bfdbfe"  # azul

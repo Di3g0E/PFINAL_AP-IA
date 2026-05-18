@@ -53,7 +53,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
 from src.api.routers import auth, chat, monitor as monitor_router, transactions, settings as settings_router
-from src.api.routers import admin_agent_graph, user_agent_graph
+from src.api.routers import admin_agent_graph, admin_chat, user_agent_graph
 from src.api.routers.modules import p1 as module_p1, p2 as module_p2, p3 as module_p3, p4 as module_p4, p5 as module_p5
 from src.utils.config import settings
 from src.utils.langfuse_integration import init_langfuse, shutdown_langfuse
@@ -205,6 +205,7 @@ app.include_router(module_p4.router)
 app.include_router(module_p5.router)
 app.include_router(user_agent_graph.router)
 app.include_router(admin_agent_graph.router)
+app.include_router(admin_chat.router)
 
 
 @app.get("/", tags=["health"], summary="Healthcheck")

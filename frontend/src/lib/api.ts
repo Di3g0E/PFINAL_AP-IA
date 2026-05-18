@@ -506,6 +506,10 @@ export async function updateUserRole(role: UserRole): Promise<UserRole> {
 export type AgentGraphNode = {
   id: string;
   agent: string;
+  // true cuando el agente pertenece a la familia "ops" (admin_orchestrator,
+  // observability). El frontend lo usa para colorear distinto y permitir
+  // al admin distinguir su propio flujo de debug del flujo de la app.
+  is_ops?: boolean;
   role: "basic" | "advanced" | null;
   count: number;
   error_count: number;
@@ -524,7 +528,12 @@ export type AgentGraphEdge = {
 export type AgentGraph = {
   nodes: AgentGraphNode[];
   edges: AgentGraphEdge[];
-  meta: { total_events: number; total_sessions: number; fallback_role?: string | null };
+  meta: {
+    total_events: number;
+    total_sessions: number;
+    fallback_role?: string | null;
+    kind?: "app" | "ops" | "all";
+  };
 };
 
 export type UserAgentGraphResponse = {
@@ -569,7 +578,8 @@ export type LogAnalysisReport = {
 export type AdminAgentGraphResponse = {
   generated_at: string;
   window_hours: number;
-  graph: AgentGraph;
+  graph_app: AgentGraph;  // agentes de aplicación (orchestrator/analyst/...)
+  graph_ops: AgentGraph;  // agentes del admin chat (admin_orchestrator/observability)
   meta: {
     langfuse: LangfuseSummary | null;
     monitor: MonitoringReport | null;
@@ -599,6 +609,62 @@ export async function getAdminAgentGraphDot(windowHours = 24): Promise<string> {
   const res = await authedFetch(`/admin/agent-graph?window_hours=${windowHours}&format=dot`);
   if (!res.ok) throw new Error(await parseError(res));
   return res.text();
+}
+
+
+// Admin chat (chat de ops con tools de observabilidad)
+
+export type AdminChatSession = {
+  id: string;
+  title: string;
+  created_at: string;
+  last_message_at: string;
+  message_count: number;
+};
+
+export type AdminChatMessage = {
+  role: "user" | "assistant" | "system";
+  content: string;
+  created_at: string;
+  sequence: number;
+};
+
+export type AdminChatResponse = {
+  response: string;
+  session_id: string;
+  tools_used: string[];
+};
+
+export async function createAdminChatSession(): Promise<{ session_id: string; title: string; created_at: string }> {
+  const res = await authedFetch("/admin/chat/sessions", { method: "POST" });
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+export async function listAdminChatSessions(): Promise<AdminChatSession[]> {
+  const res = await authedFetch("/admin/chat/sessions");
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+export async function getAdminChatMessages(sessionId: string): Promise<AdminChatMessage[]> {
+  const res = await authedFetch(`/admin/chat/sessions/${sessionId}/messages`);
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+export async function sendAdminChat(message: string, sessionId?: string): Promise<AdminChatResponse> {
+  const res = await authedFetch("/admin/chat", {
+    method: "POST",
+    body: JSON.stringify({ message, session_id: sessionId }),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+export async function deleteAdminChatSession(sessionId: string): Promise<void> {
+  const res = await authedFetch(`/admin/chat/sessions/${sessionId}`, { method: "DELETE" });
+  if (!res.ok && res.status !== 204) throw new Error(await parseError(res));
 }
 
 

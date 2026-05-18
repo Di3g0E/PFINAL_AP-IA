@@ -81,6 +81,7 @@ export function NavBar() {
             <>
               <Link href="/admin/monitor" className={linkCls("/admin/monitor")}>Monitor</Link>
               <Link href="/admin/graph" className={linkCls("/admin/graph")}>Grafo</Link>
+              <Link href="/admin/chat" className={linkCls("/admin/chat")}>Chat ops</Link>
               <button
                 onClick={onLogout}
                 className="ml-1 px-2 py-1 rounded-md text-red-600 hover:bg-red-50 transition-colors"

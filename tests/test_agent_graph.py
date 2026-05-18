@@ -167,6 +167,66 @@ def test_admin_graph_does_not_label_role():
     assert g["nodes"][0]["role"] is None
 
 
+def test_admin_graph_kind_app_excludes_ops_agents():
+    base = datetime(2026, 5, 18, 10, 0, tzinfo=timezone.utc)
+    events = [
+        _evt(agent="orchestrator", ts=base),
+        _evt(agent="analyst", ts=base + timedelta(seconds=1)),
+        _evt(agent="admin_orchestrator", ts=base + timedelta(seconds=2)),
+        _evt(agent="observability", ts=base + timedelta(seconds=3)),
+    ]
+    g = build_admin_agent_graph(events, kind="app")
+    agents = {n["agent"] for n in g["nodes"]}
+    assert agents == {"orchestrator", "analyst"}
+    assert g["meta"]["kind"] == "app"
+
+
+def test_admin_graph_kind_ops_keeps_only_ops_agents():
+    base = datetime(2026, 5, 18, 10, 0, tzinfo=timezone.utc)
+    events = [
+        _evt(agent="orchestrator", ts=base),
+        _evt(agent="admin_orchestrator", ts=base + timedelta(seconds=1)),
+        _evt(agent="observability", ts=base + timedelta(seconds=2)),
+    ]
+    g = build_admin_agent_graph(events, kind="ops")
+    agents = {n["agent"] for n in g["nodes"]}
+    assert agents == {"admin_orchestrator", "observability"}
+    # is_ops debe quedar reflejado en cada nodo del grafo ops
+    assert all(n["is_ops"] for n in g["nodes"])
+
+
+def test_admin_graph_kind_all_keeps_everything():
+    base = datetime(2026, 5, 18, 10, 0, tzinfo=timezone.utc)
+    events = [
+        _evt(agent="orchestrator", ts=base),
+        _evt(agent="observability", ts=base + timedelta(seconds=1)),
+    ]
+    g = build_admin_agent_graph(events, kind="all")
+    agents = {n["agent"] for n in g["nodes"]}
+    assert agents == {"orchestrator", "observability"}
+
+
+def test_admin_graph_kind_invalid_raises():
+    with pytest.raises(ValueError, match="kind"):
+        build_admin_agent_graph([], kind="bogus")
+
+
+def test_user_graph_marks_ops_nodes_with_is_ops():
+    """Un admin mirando /me/agent-graph ve sus eventos de ops con
+    is_ops=True para poder distinguirlos visualmente del resto."""
+    base = datetime(2026, 5, 18, 10, 0, tzinfo=timezone.utc)
+    events = [
+        _evt(agent="admin_orchestrator", ts=base),
+        _evt(agent="observability", ts=base + timedelta(seconds=1)),
+        _evt(agent="analyst", ts=base + timedelta(seconds=2)),
+    ]
+    g = build_user_agent_graph(events, fallback_role=None)
+    by_agent = {n["agent"]: n for n in g["nodes"]}
+    assert by_agent["admin_orchestrator"]["is_ops"] is True
+    assert by_agent["observability"]["is_ops"] is True
+    assert by_agent["analyst"]["is_ops"] is False
+
+
 # graph_to_dot ----------------------------------------------------------------
 
 

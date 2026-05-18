@@ -2,11 +2,62 @@
 
 import { useEffect, useRef, useState } from "react";
 import { instance } from "@viz-js/viz";
+import type { AgentGraph } from "@/lib/api";
 
 type Props = {
   dot: string;
   className?: string;
 };
+
+
+/**
+ * Convierte un `AgentGraph` JSON a notación DOT en cliente.
+ *
+ * Espejo simplificado del `graph_to_dot` del backend. Se usa cuando el
+ * frontend ya tiene el grafo como JSON (p. ej. el `graph_ops` del admin,
+ * que el endpoint `?format=dot` no expone) y queremos renderizarlo sin
+ * un segundo round-trip.
+ */
+export function agentGraphToDot(graph: AgentGraph, title: string): string {
+  const lines: string[] = [
+    `digraph "${title.replace(/"/g, '\\"')}" {`,
+    "  rankdir=LR;",
+    "  node [shape=box, style=\"rounded,filled\", fontname=\"Helvetica\"];",
+    "  edge [fontname=\"Helvetica\", fontsize=10];",
+  ];
+
+  for (const n of graph.nodes) {
+    const labelParts: string[] = [n.id, `count=${n.count}`];
+    if (n.avg_latency_ms != null) labelParts.push(`avg=${n.avg_latency_ms}ms`);
+    if (n.error_rate) labelParts.push(`err=${(n.error_rate * 100).toFixed(1)}%`);
+    const label = labelParts.join("\\n");
+    const fill = nodeColor(n);
+    const id = n.id.replace(/"/g, '\\"');
+    lines.push(`  "${id}" [label="${label}", fillcolor="${fill}"];`);
+  }
+
+  for (const e of graph.edges) {
+    const parts = [`n=${e.count}`];
+    if (e.avg_latency_ms != null) parts.push(`${e.avg_latency_ms}ms`);
+    const label = parts.join(" · ");
+    const s = e.source.replace(/"/g, '\\"');
+    const t = e.target.replace(/"/g, '\\"');
+    lines.push(`  "${s}" -> "${t}" [label="${label}"];`);
+  }
+  lines.push("}");
+  return lines.join("\n");
+}
+
+
+function nodeColor(n: AgentGraph["nodes"][number]): string {
+  const err = n.error_rate ?? 0;
+  if (err >= 0.20) return "#fca5a5";
+  if (err >= 0.05) return "#fde68a";
+  if (n.is_ops) return "#ddd6fe";  // morado claro: agentes de ops
+  if (n.role === "advanced") return "#bfdbfe";
+  if (n.role === "basic") return "#bbf7d0";
+  return "#e5e7eb";
+}
 
 /**
  * Renderiza un grafo en notación Graphviz DOT al SVG correspondiente
