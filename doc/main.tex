@@ -1,0 +1,182 @@
+\documentclass[a4paper,12pt,twoside]{article}
+
+% --- Codificación: agnóstica al motor ---
+% pdflatex necesita inputenc + fontenc; lualatex/xelatex ya usan
+% UTF-8 nativo y rompen si se carga inputenc.
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[utf8]{inputenc}
+  \usepackage[T1]{fontenc}
+\fi
+
+% --- Paquetes básicos ---
+\usepackage[spanish, es-noshorthands]{babel}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{amsmath, amsfonts, amssymb}
+\usepackage{listings}
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage{tcolorbox}
+\usepackage{enumitem}
+\usepackage[a4paper, top=2cm, bottom=2.5cm, left=2.5cm, right=2.5cm]{geometry}
+\usepackage{csquotes}
+\usepackage[style=ieee, backend=biber]{biblatex}
+\addbibresource{references.bib}
+\usepackage{placeins}
+\usepackage{tikz}
+\usetikzlibrary{shapes.geometric, arrows.meta, positioning, calc, fit, backgrounds, babel}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\usepgfplotslibrary{statistics}
+\usepackage{xcolor}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{ragged2e}
+\newcolumntype{Y}{>{\RaggedRight\arraybackslash}X}
+
+% --- Configuración de listings para Python ---
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.97,0.97,0.97}
+
+\lstdefinestyle{pythonstyle}{
+    backgroundcolor=\color{backcolour},
+    commentstyle=\color{codegreen}\itshape,
+    keywordstyle=\color{blue}\bfseries,
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,
+    breaklines=true,
+    captionpos=b,
+    keepspaces=true,
+    numbers=left,
+    numbersep=5pt,
+    showspaces=false,
+    showstringspaces=false,
+    showtabs=false,
+    tabsize=4,
+    frame=single,
+    rulecolor=\color{gray!40},
+    language=Python
+}
+
+% --- Evitar que los floats crucen subsecciones ---
+\makeatletter
+\AtBeginDocument{%
+  \let\origsubsection\subsection
+  \renewcommand{\subsection}{\FloatBarrier\origsubsection}%
+}
+\makeatother
+
+% --- Parámetros de colocación de flotantes para minimizar huecos ---
+% Permitimos más flotantes por página y menos texto mínimo, así
+% [t] no fuerza páginas casi vacías cuando una figura no cabe junto
+% a su párrafo de referencia.
+\setcounter{topnumber}{4}
+\setcounter{bottomnumber}{2}
+\setcounter{totalnumber}{6}
+\renewcommand{\topfraction}{0.95}
+\renewcommand{\bottomfraction}{0.95}
+\renewcommand{\textfraction}{0.05}
+\renewcommand{\floatpagefraction}{0.85}
+
+% --- Asegurar texto justificado (por defecto en LaTeX) ---
+\tolerance=1
+\emergencystretch=\maxdimen
+\hyphenpenalty=10000
+\hbadness=10000
+
+% --- Redefinir \cleardoublepage para que las páginas en blanco no lleven número ---
+\makeatletter
+\def\cleardoublepage{\clearpage\if@twoside \ifodd\c@page\else
+    \thispagestyle{empty}%
+    \hbox{}\newpage\if@twocolumn\hbox{}\newpage\fi\fi\fi}
+\makeatother
+
+% --- Comando para páginas en blanco sin numeración ---
+\newcommand{\blankpage}{%
+    \newpage
+    \thispagestyle{empty}
+    \mbox{}
+    \newpage
+}
+
+\title{\Huge \textbf{Práctica Final: Sistema Multiagente Financiero con LangGraph, FastAPI y Observabilidad Humana}}
+\author{Diego Esclarín \and Sofía Contreras}
+\date{\today}
+
+\begin{document}
+
+% --- Página 1: Portada (Interna -1) ---
+\begin{titlepage}
+    \thispagestyle{empty}
+    \centering
+    \vspace*{1cm}
+
+    {\Huge \textbf{Práctica Final: Sistema Multiagente Financiero con LangGraph, FastAPI y Observabilidad Humana} \par}
+    \vspace{1.5cm}
+
+    \begin{figure}[h]
+        \centering
+        \includegraphics[width=0.6\textwidth]{figures/Logo_URJC.png}
+    \end{figure}
+
+    \vfill
+
+    {\large \textbf{Autores:} \par}
+    \vspace{0.3cm}
+    {\large Diego Esclarín (51729611N) \par}
+    {\large Sofía Contreras (09848471D) \par}
+
+    \vspace{1.5cm}
+
+    {\large Aprendizaje en Inteligencia Artificial \par}
+    {\large Grado en Ingeniería en Inteligencia Artificial \par}
+    {\large Universidad Rey Juan Carlos \par}
+    {\large Curso 2025--26 \par}
+
+\end{titlepage}
+\setcounter{page}{0}
+
+% --- Página 2: Blanco (Interna 0) ---
+\blankpage
+
+% --- Índices ---
+\thispagestyle{empty}
+\tableofcontents
+\cleardoublepage
+
+\thispagestyle{empty}
+\listoffigures
+\cleardoublepage
+
+\thispagestyle{empty}
+\listoftables
+\cleardoublepage
+
+% --- Inicio del contenido ---
+\pagestyle{plain}
+
+\input{sections/01_introduccion}
+\cleardoublepage
+
+\input{sections/02_contexto}
+\cleardoublepage
+
+\input{sections/03_estado_arte}
+\cleardoublepage
+
+\input{sections/04_propuesta}
+\cleardoublepage
+
+\input{sections/05_conclusiones}
+
+% --- Referencias en página impar ---
+\cleardoublepage
+\printbibliography[title={Referencias Bibliográficas}]
+
+\end{document}

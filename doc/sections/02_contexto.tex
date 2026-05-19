@@ -1,0 +1,141 @@
+\section{Contexto}
+\label{sec:contexto}
+
+\subsection{Integración de P1--P5}
+
+A lo largo de la asignatura se han implementado cinco prácticas
+independientes pero complementarias, cada una orientada a un eje
+distinto del aprendizaje automático aplicado al dominio financiero
+personal:
+
+\begin{itemize}[leftmargin=1.5em,itemsep=0.2em]
+  \item \textbf{P1 --- Predicción temporal.} Modelos de regresión y
+        series temporales (Random Forest, HistGradientBoosting y
+        ARIMA) para anticipar el gasto del mes siguiente.
+  \item \textbf{P2 --- Clasificación multietiqueta.} Asignación de la
+        categoría (\textit{Area}) a una transacción a partir de su
+        descripción textual mediante un \texttt{SGDClassifier} sobre
+        char $n$-gramas.
+  \item \textbf{P3 --- OCR financiero.} Extracción del importe total
+        de facturas reales mediante \texttt{PaddleOCR} y un scorer
+        basado en Gradient Boosting.
+  \item \textbf{P4 --- Agente conversacional.} Primer contacto con
+        \texttt{LangGraph} y la orquestación de herramientas mediante
+        LLM.
+  \item \textbf{P5 --- Biometría facial y detección de anomalías.}
+        Pipeline MTCNN + FaceNet + DenseNet201 para autenticación
+        biométrica con \textit{liveness}, e \texttt{IsolationForest}
+        para anomalías financieras.
+\end{itemize}
+
+La práctica final exige evolucionar la práctica 6, que integra las cinco anteriores bajo un único sistema
+multiagente que conserva la fiabilidad de las soluciones individuales
+ganando cohesión, persistencia multiusuario y observabilidad
+profesional. El enunciado considera P4 cubierto, por lo
+que la \textit{evolución incremental} (Sección~\ref{subsec:evoluciones})
+recae sobre P2, P3 y P5.
+
+\subsection{Requisitos funcionales}
+
+La especificación de la práctica final incluye un conjunto de
+requisitos transversales que el sistema debe satisfacer. La
+Tabla~\ref{tab:requisitos} los enumera y los enlaza con la sección de
+la propuesta en la que se justifica su cumplimiento.
+
+\begin{table}[!htbp]
+  \centering
+  \footnotesize
+  \begin{tabularx}{\linewidth}{@{}p{0.42\linewidth} X@{}}
+    \toprule
+    \textbf{Requisito} & \textbf{Sección de la propuesta} \\
+    \midrule
+    Histórico conversacional para el LLM &
+      \S\ref{subsec:memoria-conversacional} \\
+    Recuperación de chats previos &
+      \S\ref{subsec:memoria-conversacional} \\
+    Diagramas visuales dinámicos (XAI) &
+      \S\ref{subsec:xai-visualizacion} \\
+    Monitorización del sistema (MonitorAgent) &
+      \S\ref{subsec:monitorizacion} \\
+    Al menos dos roles diferenciados en LangGraph &
+      \S\ref{subsec:roles} \\
+    Módulos P1--P5 distribuidos vía API REST &
+      \S\ref{subsec:microservicios} \\
+    Diálogo natural con detección de intención &
+      \S\ref{subsec:intencion} \\
+    Uso de Langfuse &
+      \S\ref{subsec:langfuse} \\
+    Prompt engineering (ASPECCT) &
+      \S\ref{subsec:aspect} \\
+    Tres evoluciones incrementales (P2, P3, P5) &
+      \S\ref{subsec:evoluciones} \\
+    Evaluaciones cuantitativas &
+      \S\ref{subsec:evoluciones} \\
+    Pruebas unitarias y de estrés &
+      \S\ref{subsec:tests} \\
+    \bottomrule
+  \end{tabularx}
+  \caption{Mapeo entre los requisitos del enunciado y las secciones de la
+  propuesta.}
+  \label{tab:requisitos}
+\end{table}
+
+\subsection{Restricciones técnicas y de despliegue}
+
+El sistema se ha diseñado con tres restricciones operativas
+relevantes que han condicionado tanto la elección de tecnologías
+como la arquitectura final.
+
+\paragraph{Stack gratuito o de coste mínimo.} El LLM principal corre
+en \textit{Groq Cloud} (plan gratuito con \textit{rate limits} de
+30 \textit{requests}/min para \texttt{llama-3.3-70b-versatile}), la
+base de datos vive en \textit{Supabase} (Postgres gestionado con
+500\,MB en el plan \textit{free}), la observabilidad en
+\textit{Langfuse Cloud} (50.000 \textit{traces}/mes gratuitos) y el
+frontend en \textit{Vercel}. El \textit{backend} se sirve localmente
+con \texttt{uvicorn} y se expone públicamente vía un túnel
+\textit{ngrok} con dominio estático, ya que el plan gratuito de
+Vercel no permite contenedores con dependencias nativas pesadas
+(PaddlePaddle, PyTorch, OpenCV) en sus \textit{serverless functions}.
+
+\paragraph{Compatibilidad de versiones.} \texttt{PaddleOCR 2.6.2}
+exige \texttt{numpy<2.0}, lo que ancla todo el \textit{stack} a
+\texttt{NumPy 1.26.4}. Esta restricción ha condicionado la elección del
+resto de dependencias: \texttt{scikit-learn 1.5.0},
+\texttt{torch 2.5.1}, \texttt{langgraph 1.x},
+\texttt{facenet-pytorch} (en lugar de \texttt{deepface}, que arrastra
+TensorFlow). El \textit{trade-off} aceptado es no poder usar
+\texttt{numpy 2.x} ni las versiones más recientes de
+\texttt{scikit-learn}; a cambio, todo el \textit{stack} convive en
+un único \textit{entry point} (\texttt{uvicorn}) sin necesidad de
+aislar P3 en un microservicio aparte.
+
+\paragraph{Activos pesados con Git LFS.} Los modelos preentrenados
+(\texttt{models/area\_classifier.joblib},
+\texttt{models/ocr\_total\_extractor.joblib} y
+\texttt{models/liveness\_kaggle.pth}, $\sim$78\,MB en total) viajan
+por \textit{Git Large File Storage} para no inflar el historial del
+repositorio. Sin habilitar \texttt{git lfs install} antes del
+\texttt{clone}, los modelos se descargan como punteros de 134 bytes
+y el \textit{backend} falla al cargar el clasificador de
+\texttt{Area} en el primer turno. Adicionalmente, las dependencias
+DL (PaddleOCR, PyTorch, MediaPipe) ocupan $\sim$2{,}5\,GB en
+\texttt{.venv}, lo que descarta la idea inicial de empaquetar la
+aplicación en una imagen Docker desplegable en plataformas
+\textit{serverless} sin almacenamiento persistente.
+
+\paragraph{Cumplimiento RGPD y aislamiento multiusuario.} El sistema
+maneja datos personales sensibles (transacciones financieras y
+\textit{embeddings} biométricos), por lo que el cumplimiento del
+Reglamento General de Protección de Datos no es una característica
+opcional sino una restricción de diseño. Esto se traduce en cuatro
+exigencias concretas: (i) los \textit{embeddings} faciales se
+almacenan cifrados en disco con \texttt{Fernet} (AES-128) sobre una
+clave derivada con \texttt{PBKDF2-HMAC-SHA256} a 310.000 iteraciones,
+nunca en claro; (ii) las contraseñas se almacenan con \texttt{bcrypt}
+(\textit{cost factor} 12) sin recurrir a \texttt{passlib} ---
+incompatible con \texttt{bcrypt 4.x}; (iii) las notificaciones a
+Telegram nunca exponen importes ni descripciones salvo que el
+usuario active \texttt{notification\_level='full'}; y (iv) la
+detección de anomalías nunca compara las transacciones de un usuario
+contra el histórico de otro.

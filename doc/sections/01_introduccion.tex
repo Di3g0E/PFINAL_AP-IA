@@ -1,0 +1,34 @@
+\section{Introducción}
+\label{sec:introduccion}
+
+La memoria documenta el desarrollo de la práctica final de la
+asignatura \textit{Aprendizaje en Inteligencia Artificial} del Grado en
+Ingeniería en Inteligencia Artificial de la Universidad Rey Juan Carlos.
+El proyecto, denominado internamente \textbf{PFINAL\_AP-IA}, constituye
+la finalización e integración de las seis prácticas anteriores
+(P1--P5) bajo un único sistema multiagente conversacional dedicado a la
+gestión financiera personal.
+
+El sistema toma la forma de un asistente financiero capaz de mantener
+un diálogo natural con el usuario, registrar transacciones a partir de
+texto o imágenes (OCR), detectar anomalías de gasto, generar
+predicciones temporales, autenticar mediante biometría facial y
+explicar sus respuestas mediante visualizaciones dinámicas. La
+arquitectura se apoya en \textbf{LangGraph}~\cite{langgraph} para la
+orquestación de agentes, \textbf{FastAPI}~\cite{fastapi} para exponer
+cada módulo como microservicio REST, \textbf{Next.js}~\cite{nextjs}
+en el frontend y \textbf{Langfuse}~\cite{langfuse} para la
+monitorización de trazas, llamadas a herramientas, latencias y
+consumo de tokens.
+
+El documento se estructura en cinco capítulos. El capítulo de
+\textit{Contexto} sitúa la práctica dentro del recorrido de las prácticas anteriores y
+recoge los requisitos funcionales. El \textit{Estado del arte} repasa
+los frameworks y técnicas que sustentan las decisiones de diseño. La
+\textit{Propuesta} detalla la arquitectura implementada, los dos roles
+diferenciados (usuario y administrador), la memoria conversacional, la
+distribución de los módulos P1--P5 como microservicios, la evolución
+incremental sobre P2, P3 y P5, las metodologías de prompt engineering
+empleadas y la estrategia de pruebas unitarias y de estrés. Las
+\textit{Conclusiones} resumen los resultados cuantitativos obtenidos y
+las líneas de trabajo futuro.

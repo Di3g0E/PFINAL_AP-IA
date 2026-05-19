@@ -1,0 +1,30 @@
+\begin{tikzpicture}[
+    node distance=0.9cm and 1.2cm,
+    every node/.style={font=\small},
+    user/.style={ellipse, draw, minimum width=2cm, fill=gray!10},
+    decision/.style={diamond, draw, aspect=2, inner sep=1pt, align=center, fill=yellow!20},
+    process/.style={rectangle, draw, rounded corners, minimum width=2.8cm, minimum height=0.8cm, align=center, fill=blue!10},
+    narrate/.style={rectangle, draw, rounded corners, minimum width=2.8cm, minimum height=0.8cm, align=center, fill=orange!20},
+    sub/.style={rectangle, draw, rounded corners, minimum width=2.8cm, minimum height=0.8cm, align=center, fill=green!12},
+    endbox/.style={rectangle, draw, rounded corners, minimum width=1.6cm, minimum height=0.7cm, align=center, fill=red!12},
+    arrow/.style={-Latex, thick}
+]
+    \node[user] (in) {Mensaje del usuario};
+    \node[decision, below=of in] (dec) {¿\texttt{\_has\_subagent\_data}?};
+    \node[process, below left=1.0cm and 0.4cm of dec] (route) {\texttt{\_route}\\\scriptsize{(structured output)}};
+    \node[narrate, below right=1.0cm and 0.4cm of dec] (narr) {\texttt{\_narrate}\\\scriptsize{(LLM plano)}};
+    \node[sub, below=of route] (sub) {Sub-agente\\\scriptsize{Security / Registrar / Analyst}};
+    \node[process, below=of sub, fill=blue!5] (slot) {Slot poblado en\\\texttt{OrchestratorState}};
+    \node[endbox, below=of narr] (end) {END\\\scriptsize{respuesta al usuario}};
+
+    \draw[arrow] (in) -- (dec);
+    \draw[arrow] (dec) -| node[above, pos=0.25] {\scriptsize No} (route);
+    \draw[arrow] (dec) -| node[above, pos=0.25] {\scriptsize Sí} (narr);
+    \draw[arrow] (route) -- (sub) node[midway, right] {\scriptsize \texttt{delegate\_*}};
+    \draw[arrow] (sub) -- (slot);
+    \draw[arrow] (narr) -- (end);
+
+    % loop back to orchestrator
+    \draw[arrow, dashed] (slot.west) -- ++(-2.5,0) |- (dec.west)
+        node[pos=0.25, left, align=center, font=\scriptsize] {bucle\\(máx. 6\\iter.)};
+\end{tikzpicture}

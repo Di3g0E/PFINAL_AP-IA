@@ -1,0 +1,29 @@
+% Datos extraídos de doc/results/p3_eur_baseline.json y p3_eur_post.json
+\begin{tikzpicture}
+\begin{axis}[
+    width=\linewidth, height=6cm,
+    ybar,
+    bar width=14pt,
+    ylabel={Cobertura / accuracy},
+    ymin=0, ymax=1.1,
+    ytick={0,0.25,0.5,0.75,1.0},
+    yticklabel={\pgfmathprintnumber[fixed,precision=2]{\tick}},
+    symbolic x coords={Total, Fecha, NIF, Comercio, IVA},
+    xtick=data,
+    legend style={at={(0.5,1.02)},anchor=south,legend columns=2,font=\scriptsize},
+    nodes near coords,
+    nodes near coords style={font=\tiny},
+    every node near coord/.append style={/pgf/number format/.cd, fixed, precision=2},
+    grid=major,
+    grid style={dashed, gray!30},
+    enlarge x limits=0.15,
+]
+\addplot[fill=red!25,draw=red!60!black] coordinates {
+  (Total,0.067) (Fecha,0.0) (NIF,0.0) (Comercio,0.0) (IVA,0.0)
+};
+\addplot[fill=green!35,draw=green!50!black] coordinates {
+  (Total,1.000) (Fecha,1.000) (NIF,1.000) (Comercio,1.000) (IVA,0.633)
+};
+\legend{Baseline (P3 original sobre EUR), Post-E2 (scorer EUR + InvoiceMetadata)}
+\end{axis}
+\end{tikzpicture}

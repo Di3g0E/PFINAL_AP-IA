@@ -81,7 +81,8 @@ cryptography>=41.0.0
 
 # --- Observability (Fase 6: monitorización humana con Langfuse) ---
 # Si LANGFUSE_* no está configurado, los handlers son no-op y nada falla.
-langfuse>=2.50.0,<3.0.0
+# (langfuse>=4.6.1 ya está declarado arriba con el bloque langchain — esa es
+# la versión efectiva; la constraint legacy <3.0.0 se eliminó al migrar a v4.)
 
 # --- Notifications (Telegram + WhatsApp opcional) ---
 pywhatkit>=5.4

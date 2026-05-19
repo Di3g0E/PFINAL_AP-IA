@@ -1,0 +1,44 @@
+\section{Conclusiones}
+\label{sec:conclusiones}
+
+La práctica final ha permitido ampliar y mejorar la práctica seis, que integraba las cinco prácticas previas
+en un sistema multiagente cohesionado, demostrando que las técnicas
+aisladas estudiadas durante el curso (predicción temporal,
+clasificación de texto, OCR, agentes LLM y biometría) pueden
+colaborar bajo una orquestación con LangGraph, sirviéndose
+mutuamente a través de un bus de microservicios REST y bajo una
+capa de observabilidad que cierra el ciclo de vida del
+sistema en producción.
+
+Los resultados cuantitativos mestran el esfuerzo invertido en las
+tres evoluciones incrementales: la \textit{accuracy} cold-start del
+clasificador de categoría sube del 52\,\% al 84\,\% gracias a los
+\textit{embeddings} multilingües; la \textit{accuracy} del OCR
+sobre facturas españolas pasa del 6{,}67\,\% al 100\,\% tras
+reentrenar con datos europeos y enriquecer el contrato con
+\textit{metadata} estructurada; y la biometría con vídeo más
+anti-spoofing neutraliza el FAR del 36\,\% obtenido con foto única
+contra ataques de pantalla. Las 21 pruebas unitarias y las pruebas
+de carga con Locust garantizan que estas mejoras no han degradado
+la fiabilidad ni el comportamiento bajo concurrencia.
+
+Más allá de los números, el principal aprendizaje ha sido el de
+\textbf{construir un sistema que se puede observar y operar}: el
+\texttt{MonitorAgent} y el chat de administrador hacen visible el
+estado interno del sistema, Langfuse permite auditar cada llamada al
+LLM, y los grafos LangGraph se pueden inspeccionar dinámicamente
+desde la propia UI. Esta capacidad de introspección es la que
+distingue un prototipo académico de un sistema susceptible de ser
+desplegado.
+
+Como líneas de trabajo futuro destacan: (i) la finalización de las
+fases 4--6 de la biometría (giros de cabeza, Moiré, rPPG); (ii) la
+adopción de Alembic para gestionar las migraciones de esquema más
+allá de la migración ligera implementada en \texttt{init\_db.py};
+(iii) la sustitución de los \textit{tokens} en \texttt{localStorage}
+por \textit{cookies} \texttt{httpOnly} con CSRF; (iv) la extracción
+de los módulos \texttt{/modules/p*} a contenedores independientes en
+Kubernetes para escalar el OCR de forma horizontal; y (v) el
+entrenamiento de un modelo de \textit{intent classification}
+específico que precalifique la decisión del orquestador y reduzca el
+número de llamadas a LLM en interacciones puramente conversacionales.

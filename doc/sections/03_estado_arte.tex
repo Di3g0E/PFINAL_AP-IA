@@ -1,0 +1,118 @@
+\section{Estado del Arte}
+\label{sec:estado-arte}
+
+Esta sección revisa los marcos teóricos y las herramientas en las que
+se apoya el sistema, distinguiendo aquellas que han sido finalmente
+adoptadas de las alternativas evaluadas y descartadas.
+
+\subsection{Orquestación de agentes con LangGraph}
+
+LangGraph~\cite{langgraph} (LangChain Labs) es una biblioteca para
+construir sistemas multiagente como grafos dirigidos cuyos nodos son
+funciones Python y cuyas aristas pueden ser condicionales,
+ejecutadas en función del estado tipado del grafo. Frente a
+alternativas como \texttt{AutoGen} (Microsoft) o \texttt{CrewAI},
+LangGraph destaca por:
+
+\begin{itemize}[leftmargin=1.5em,itemsep=0.2em]
+  \item Su \textbf{enfoque grafo + estado tipado}, que permite
+        razonar formalmente sobre la trayectoria del control y
+        garantiza la \textit{terminación} (en este proyecto se
+        impone un \textit{iteration limit} de seis pasos).
+  \item Su \textbf{soporte nativo de checkpointers} (\texttt{MemorySaver},
+        \texttt{PostgresSaver}, \texttt{SqliteSaver}), que guarda
+        el histórico conversacional dentro del mismo grafo sin
+        necesidad de un sistema externo.
+  \item La posibilidad de combinar \textit{structured output}
+        (Pydantic) con LLM \textit{plain} en distintos nodos del
+        mismo grafo. En el sistema se aprovecha para separar
+        \textit{routing} (decisión) y \textit{narración} (texto
+        natural).
+\end{itemize}
+
+\subsection{LLM y \textit{providers}}
+
+El catálogo de proveedores ha quedado configurable por usuario, con
+soporte nativo para Groq~\cite{groq}, OpenAI, Anthropic y Google. El
+modelo por defecto es \texttt{llama-3.3-70b-versatile} servido por
+Groq, que ofrece latencias inferiores a 500\,ms en \textit{tool
+calling} gracias a su hardware LPU dedicado. Para tareas de
+\textit{small-talk} y resumen rodante se usa
+\texttt{llama-3.1-8b-instant}, que reduce el gasto de tokens en
+operaciones poco exigentes.
+
+\subsection{Visión por computador: OCR y biometría}
+
+Para OCR se adoptó \texttt{PaddleOCR}~\cite{paddleocr} (versión 2.6.2)
+por su rendimiento sobre texto en castellano y su capacidad de
+funcionar en CPU sin GPU externa, descartando \texttt{EasyOCR} (menor
+precisión sobre tickets en euros). Para biometría se eligió
+\texttt{facenet-pytorch}~\cite{facenet} (\texttt{InceptionResnetV1}
+pre-entrenado en VGGFace2) en lugar de \texttt{deepface}/\texttt{ArcFace},
+evitando así introducir TensorFlow en el stack. La detección de rostros se apoya en
+\texttt{MTCNN}~\cite{mtcnn} y la detección de vida (\textit{liveness})
+en \texttt{DenseNet201}~\cite{densenet} con pesos ImageNet, completada
+con un módulo \textit{anti-spoofing} basado en LBP, análisis de espacio
+de color HSV/YCrCb y análisis frecuencial (FFT) para detectar
+patrones Moiré de pantallas LCD. Los \textit{landmarks} faciales
+necesarios para el \textit{challenge-response} de parpadeo se extraen
+con \texttt{MediaPipe Face Mesh}~\cite{mediapipe}.
+
+\subsection{Detección de anomalías y predicción temporal}
+
+El detector de anomalías financieras combina
+\texttt{IsolationForest}~\cite{isolation_forest} de
+\texttt{scikit-learn} con una regla heurística de 3-sigma sobre los
+importes históricos del usuario. Esta combinación, ya validada en P5,
+se ha mantenido por su robustez y por la interpretabilidad de la
+regla 3-sigma frente al usuario final. Para la predicción mensual
+conviven tres modelos --- Random Forest, HistGradientBoosting y ARIMA
+--- accesibles vía un único endpoint REST que permite seleccionar el
+método.
+
+\subsection{Clasificación de texto financiero}
+
+Para clasificar la \texttt{Area} de una transacción se ha evolucionado
+del \texttt{SGDClassifier} sobre TF-IDF de char $n$-gramas (P2
+original) hacia un pipeline híbrido basado en
+\textit{Sentence-BERT}~\cite{sentence_bert} con embeddings
+multilingües. Este enfoque permite generalizar a descripciones que
+no aparecieron en el entrenamiento (\textit{cold-start} y nuevos
+idiomas) sin perder el \textit{macro-F1} en el conjunto de
+entrenamiento.
+
+\subsection{Observabilidad: Langfuse}
+
+\texttt{Langfuse}~\cite{langfuse} (versión 3) es una plataforma de
+observabilidad específica para LLM con instrumentación nativa de
+LangChain/LangGraph mediante \texttt{CallbackHandler}. Recoge
+automáticamente la cadena de llamadas (\textit{traces}), prompt
+completo, respuesta cruda, \textit{tool calls}, latencias y consumo
+de tokens. Frente a alternativas como \texttt{LangSmith} (de pago),
+\texttt{Helicone} (no LangChain-native) o \texttt{Phoenix} (Arize),
+Langfuse ofrece un plan gratuito generoso y un \textit{dashboard} web
+suficiente para auditar la ejecución de los agentes en tiempo real.
+
+\subsection{Prompt engineering: ASPECCT vs TAREA}
+
+El enunciado permite escoger entre dos metodologías estructuradas de
+\textit{prompting}. ASPECCT~\cite{aspect} (Audience, Style, Purpose,
+Examples, Constraints, Context, Tone) separa \textit{style} y
+\textit{tone}, lo que en el sistema permite inyectar el bloque de
+estilo dependiente del rol del usuario
+(\texttt{basic}/\texttt{advanced}) como un \texttt{SystemMessage}
+independiente sin tocar el prompt principal. TAREA (Tarea, Audiencia,
+Recursos, Estructura, Activación) resulta más compacta pero no separa
+estilo y tono. Por esta razón se ha adoptado ASPECCT como metodología
+oficial del proyecto.
+
+\subsection{Pruebas de carga: Locust}
+
+Para validar el comportamiento del sistema bajo concurrencia se ha
+optado por \texttt{Locust}~\cite{locust}, un \textit{framework} de
+\textit{load testing} en Python que permite describir el
+comportamiento de los usuarios virtuales como clases con \texttt{@task}.
+La principal ventaja sobre alternativas como JMeter o k6 es que los
+escenarios se escriben en el mismo lenguaje del backend, lo que
+facilita la generación de cargas realistas (registro con
+\textit{multipart}, JWT, etc.) sin duplicar lógica.

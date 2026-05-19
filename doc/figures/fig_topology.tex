@@ -1,0 +1,24 @@
+\begin{tikzpicture}[
+    node distance=1.1cm and 1.4cm,
+    every node/.style={font=\small},
+    box/.style={rectangle, draw, rounded corners, minimum width=2.6cm, minimum height=0.9cm, align=center, fill=blue!8},
+    orchbox/.style={rectangle, draw, rounded corners, minimum width=3.6cm, minimum height=1cm, align=center, fill=orange!15},
+    dbbox/.style={cylinder, shape border rotate=90, aspect=0.25, draw, minimum width=3cm, minimum height=1.2cm, align=center, fill=green!10},
+    user/.style={ellipse, draw, minimum width=2.2cm, fill=gray!10},
+    arrow/.style={-Latex, thick}
+]
+    \node[user] (usuario) {Usuario};
+    \node[orchbox, below=of usuario] (orch) {Orchestrator\\\scriptsize{(LLM: route + narrate)}};
+    \node[box, below left=1.2cm and 0.3cm of orch] (sec) {Security\\\scriptsize{anomalías + biometría}};
+    \node[box, below=of orch] (reg) {Registrar\\\scriptsize{manual + OCR + clf}};
+    \node[box, below right=1.2cm and 0.3cm of orch] (ana) {Analyst\\\scriptsize{8 ops + forecast}};
+    \node[dbbox, below=1.2cm of reg] (db) {PostgreSQL / SQLite / Supabase};
+
+    \draw[arrow] (usuario) -- (orch) node[midway, right] {\scriptsize chat / HTTP};
+    \draw[arrow] (orch) -- (sec);
+    \draw[arrow] (orch) -- (reg);
+    \draw[arrow] (orch) -- (ana);
+    \draw[arrow] (sec) -- (db);
+    \draw[arrow] (reg) -- (db);
+    \draw[arrow] (ana) -- (db);
+\end{tikzpicture}

@@ -48,13 +48,17 @@ data/
 *.swp
 
 # Documentos
-doc/main.tex
-doc/
-!doc/main.pdf
-!doc/figures/**.png
-!doc/figures/**.tex
-!doc/factura3.jpg
-!doc/prompts_aspect.md
-!doc/agent_contracts.md
-!doc/MEMORIA.md
-!doc/PRUEBAS.md
+doc/**.toc
+doc/**.synctex.*
+doc/**.out
+doc/**.aux
+doc/**.fls
+doc/**.lof
+doc/**.xml
+doc/**.lot
+doc/**.log
+doc/**.fdb*
+doc/**.blg*
+doc/**.bbl*
+doc/**.bcf
+doc/**.run.xml

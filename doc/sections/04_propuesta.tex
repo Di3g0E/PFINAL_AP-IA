@@ -1,0 +1,685 @@
+\section{Propuesta}
+\label{sec:propuesta}
+
+Esta sección describe la solución implementada, organizada en torno a
+los doce requisitos del enunciado.
+
+\subsection{Arquitectura general}
+\label{subsec:arquitectura}
+
+El sistema sigue una arquitectura en tres capas. La capa de
+\textbf{presentación} la conforma un frontend en Next.js 14 (App
+Router) desplegado en Vercel, con dos dominios funcionales separados:
+\texttt{/chat} (financiero, usuario regular) y \texttt{/admin/chat}
+(operativo, administrador). La capa de \textbf{aplicación} es una
+API FastAPI servida por Uvicorn, que expone tanto los endpoints de
+chat como los microservicios de los módulos \texttt{/modules/p1}
+hasta \texttt{/modules/p5}. La capa de \textbf{datos} la forman una
+base de datos PostgreSQL alojada en Supabase~\cite{supabase} y un
+\textit{store} cifrado en disco para los \textit{embeddings}
+biométricos. La Figura~\ref{fig:topology} resume esta topología.
+
+\begin{figure}[t]
+    \centering
+    \input{figures/fig_topology.tex}
+    \caption{Topología general del sistema multiagente. El Orquestador
+    es el único nodo con acceso al LLM y delega en tres sub-agentes
+    deterministas que persisten en Supabase.}
+    \label{fig:topology}
+\end{figure}
+
+El núcleo lógico es un grafo LangGraph~\cite{langgraph} cuyo nodo raíz
+es el \textbf{Orquestador}. El Orquestador es el único componente con
+acceso al LLM; los sub-agentes (Analyst, Registrar, Security,
+Conversational) son funciones deterministas que devuelven
+\textit{dataclasses} Pydantic. El grafo está acotado a seis
+iteraciones máximas para evitar bucles, y emplea
+\texttt{JsonPlusSerializer} con tipos registrados explícitamente para
+silenciar los \textit{warnings} de deserialización de LangGraph~1.x.
+
+\paragraph{Reglas de oro del diseño.} La arquitectura se rige por
+seis invariantes que se respetan en todo el código:
+
+\begin{enumerate}[leftmargin=1.5em,itemsep=0.15em]
+  \item \textbf{Solo el Orquestador habla con el usuario.} Los
+        sub-agentes nunca devuelven texto libre, solo
+        \textit{dataclasses} firmadas (\texttt{AnalysisReport},
+        \texttt{RegistryResult}, \texttt{SecurityVerdict}). El texto
+        final lo genera el narrador del Orquestador.
+  \item \textbf{Solo el Orquestador usa LLM.} Security, Registrar y
+        Analyst son deterministas: modelos clásicos
+        (\texttt{IsolationForest}, \texttt{SGDClassifier},
+        \texttt{PaddleOCR}) más reglas. Esto facilita los \textit{tests}
+        y garantiza reproducibilidad.
+  \item \textbf{Aislamiento de estado.} Cada sub-agente escribe en su
+        \textit{slot} del \texttt{OrchestratorState}
+        (\texttt{analysis\_report}, \texttt{registry\_result},
+        \texttt{security\_verdict}), sin interferir entre sí.
+  \item \textbf{Bucle controlado.} El flujo
+        \textit{routing}~$\rightarrow$~sub-agente~$\rightarrow$~narración~$\rightarrow$~END
+        lleva un cinturón anti-bucles de seis iteraciones máximas.
+  \item \textbf{Notificaciones disparadas en el agente de origen,}
+        nunca desde el \textit{frontend}: si Security marca una
+        transacción como anómala, el aviso a Telegram se dispara en
+        el propio agente, en el mismo turno.
+  \item \textbf{Los datos del usuario solo se validan contra su
+        propio histórico.} Security usa \texttt{load\_user\_history\_db\_only},
+        nunca cae al CSV de demostración. Esta regla nació de un
+        \textit{bug} en el que las anomalías se evaluaban contra el
+        histórico de prueba.
+\end{enumerate}
+
+La Figura~\ref{fig:orchestrator-flow} ilustra el doble modo
+\textit{route}/\textit{narrate} del Orquestador y el bucle controlado
+con los sub-agentes. La detección de modo se reduce a comprobar si el
+estado ya contiene datos de algún sub-agente
+(\texttt{\_has\_subagent\_data(state)}): si no los hay, el LLM se
+invoca con \textit{structured output} para producir una
+\texttt{OrchestratorDecision}; si los hay, se invoca en modo plano
+para narrar el resultado en español adaptado al rol del usuario.
+
+\begin{figure}[t]
+    \centering
+    \input{figures/fig_orchestrator_flow.tex}
+    \caption{Flujo interno del Orquestador. En función de si el
+    estado contiene datos de sub-agente, el LLM opera en modo
+    \texttt{\_route} (\textit{structured output}) o \texttt{\_narrate}
+    (texto plano). El bucle se acota a seis iteraciones para evitar
+    delegaciones infinitas.}
+    \label{fig:orchestrator-flow}
+\end{figure}
+
+\subsection{Roles diferenciados (usuario vs. administrador)}
+\label{subsec:roles}
+
+\textbf{Cumple el requisito de al menos dos roles en LangGraph.}
+El sistema implementa dos grafos separados, cada uno con su propio
+LLM, su conjunto de \textit{tools} y su propio \texttt{MemorySaver}.
+
+\begin{itemize}[leftmargin=1.5em,itemsep=0.2em]
+  \item \textbf{Grafo de usuario} (\texttt{build\_graph()}): atiende a
+        los usuarios regulares. Contiene los nodos
+        \texttt{orchestrator}, \texttt{analyst}, \texttt{security},
+        \texttt{registrar} y \texttt{conversational}, conectados por
+        aristas condicionales según el campo \texttt{last\_decision.action}
+        del estado.
+  \item \textbf{Grafo de administrador} (\texttt{build\_observability\_graph(llm)}):
+        atiende al chat de operaciones. Su único sub-agente es
+        \texttt{Observability}, que expone cinco \textit{tools}
+        especializadas: \texttt{get\_system\_health},
+        \texttt{query\_recent\_events}, \texttt{analyze\_log\_anomalies},
+        \texttt{get\_llm\_usage} (Langfuse) y
+        \texttt{get\_agent\_flow\_summary}.
+\end{itemize}
+
+La diferenciación es visible para el usuario en varios planos: (i) el
+acceso requiere autenticación distinta (biometría + passphrase para
+el usuario, ver Figura~\ref{fig:screenshot-login}; \textit{passphrase}
+para el administrador), (ii) la UI expone rutas distintas, (iii) el campo \texttt{tools\_used} de la
+respuesta del admin enumera explícitamente las tools invocadas en ese
+turno y (iv) la visualización del grafo agéntico en
+\texttt{/me/agent-graph} y \texttt{/admin/agent-graph} muestra
+diferentes topologías. Adicionalmente, dentro del grafo de usuario
+existen dos \textbf{sub-roles de estilo conversacional} (\texttt{basic}
+y \texttt{advanced}), inyectados como bloque ASPECCT al narrator, que
+cambian el tono y el grado de detalle de las respuestas (cifras
+redondeadas frente a percentiles y términos financieros).
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=0.7\textwidth]{figures/screenshot_login.png}
+    \caption{Pantalla de \textit{login} de usuario regular. La
+    captura de webcam (\texttt{getUserMedia}~+~\texttt{MediaRecorder})
+    produce un vídeo WebM de 3{,}5\,s que se envía como \texttt{face\_video}
+    al pipeline biométrico de Security (MTCNN~+~FaceNet~+~DenseNet201).}
+    \label{fig:screenshot-login}
+\end{figure}
+
+
+\subsection{Módulos P1--P5 como microservicios REST}
+\label{subsec:microservicios}
+
+\textbf{Cumple el requisito de distribución vía API REST.}
+Cada uno de los módulos previos se ha refactorizado como un
+\textit{router} FastAPI independiente bajo el prefijo
+\texttt{/modules/p\{1..5\}}:
+
+\begin{itemize}[leftmargin=1.5em,itemsep=0.2em]
+  \item \texttt{POST /modules/p1/predict-next-month} --- Predicción
+        temporal del gasto (RF, HGB, ARIMA).
+  \item \texttt{POST /modules/p2/classify-area} --- Clasificación de
+        la \texttt{Area} de una descripción textual.
+  \item \texttt{POST /modules/p3/ocr-extract} --- OCR enriquecido con
+        \texttt{InvoiceMetadata}.
+  \item \texttt{POST /modules/p4/*} --- Operaciones analíticas
+        (resumen mensual, \textit{breakdown}, tendencias\dots).
+  \item \texttt{POST /modules/p5/biometric-verify} --- Verificación
+        biométrica facial.
+\end{itemize}
+
+Los agentes del grafo \textbf{no llaman a estas funciones en proceso}:
+las consumen como \textit{tools} LangChain que internamente abren una
+conexión HTTP \textit{loopback} a la propia API
+(\texttt{src/agents/tools/http\_client.py}). Cada \textit{hop} interno
+genera un JWT de 5 minutos firmado con \texttt{JWT\_SECRET} para
+pasar el middleware de autenticación sin acoplar los \textit{routers}
+al agente. El día que se quiera mover \texttt{/modules/p3} a un pod aparte basta con cambiar
+\texttt{INTERNAL\_API\_BASE\_URL} en la configuración.
+
+\subsection{Memoria conversacional y recuperación de sesiones}
+\label{subsec:memoria-conversacional}
+
+\textbf{Cumple los requisitos de histórico conversacional y de
+recuperación de chats previos.}
+La memoria conversacional se implementa en dos planos complementarios:
+
+\begin{enumerate}[leftmargin=1.5em,itemsep=0.2em]
+  \item \textbf{En memoria del grafo:} cada conversación dispone de
+        un \texttt{thread\_id} de la forma \texttt{user\_id:session\_id}
+        en el \texttt{MemorySaver} de LangGraph. Esto permite que el
+        Orquestador acceda a todos los \textit{messages},
+        \texttt{last\_decision}, \texttt{analysis\_report}, etc., del
+        turno anterior sin que el cliente reenvíe nada.
+  \item \textbf{En base de datos:} las tablas \texttt{chat\_sessions}
+        y \texttt{chat\_messages} persisten cada turno con su
+        \textit{role} (\texttt{user}/\texttt{assistant}/\texttt{system}),
+        contenido y \textit{timestamp}. Los endpoints
+        \texttt{GET /chat/sessions} y
+        \texttt{GET /chat/sessions/\{id\}} permiten al frontend
+        listar las conversaciones del usuario y rehidratarlas con
+        los últimos veinte mensajes.
+\end{enumerate}
+
+Para no inflar la ventana de contexto del LLM cada ocho turnos se
+genera un \textbf{resumen rodante} (\texttt{summary}) mediante un
+prompt ASPECCT específico. El resumen condensa importes, fechas,
+categorías y acciones pendientes, y se reinyecta en el estado del
+grafo en cada turno futuro como \texttt{SystemMessage}, sustituyendo
+a los turnos antiguos.
+
+\subsection{Diálogo natural con detección de intención}
+\label{subsec:intencion}
+
+\textbf{Cumple el requisito de detección semántica de intención.}
+La detección de intención reside íntegramente en el nodo
+\texttt{orchestrator\_node}, que opera en dos modos según el contenido
+del estado:
+
+\begin{itemize}[leftmargin=1.5em,itemsep=0.2em]
+  \item \textbf{Modo \textit{route}:} cuando no hay datos de
+        sub-agente en el estado, el LLM produce una decisión
+        estructurada (\texttt{OrchestratorDecision}) con
+        \textit{structured output} que escoge entre seis acciones
+        posibles (\texttt{delegate\_analyst}, \texttt{delegate\_registrar},
+        \texttt{delegate\_security}, \texttt{delegate\_conversational},
+        \texttt{ask\_user}, \texttt{respond\_final}).
+  \item \textbf{Modo \textit{narrate}:} una vez ejecutado un
+        sub-agente, el LLM se invoca en modo plano (\texttt{invoke})
+        para convertir los datos estructurados en texto natural.
+\end{itemize}
+
+Si la intención del usuario es \textit{small-talk}, saludo o pregunta
+sobre las capacidades del sistema, el router escoge
+\texttt{delegate\_conversational} y se evita por completo cualquier
+llamada a P1--P5. Esto permite que el sistema mantenga una
+conversación natural sin convertirse en un comando estructurado.
+
+\subsection{Diagramas visuales dinámicos (XAI)}
+\label{subsec:xai-visualizacion}
+
+\textbf{Cumple el requisito de visualización dinámica con explicación.}
+El \texttt{ChatResponse} expone un campo opcional \texttt{chart} con
+un \textit{spec} de gráfico (\texttt{chart\_type}, \texttt{series},
+\texttt{title}\dots) que el frontend renderiza con Recharts. El LLM
+del Orquestador decide en \textit{routing} si la operación pedida
+requiere un gráfico, y en caso afirmativo qué tipo
+(\texttt{line}/\texttt{bar}/\texttt{pie}) tiene más sentido según la
+naturaleza de los datos. La explicación textual asociada la genera el
+narrator a partir del mismo \texttt{AnalysisReport}, garantizando
+coherencia entre número y narrativa. La Figura~\ref{fig:screenshot-chat}
+muestra un ejemplo de la interfaz conversacional.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=0.85\textwidth]{figures/screenshot_chat.png}
+    \caption{Captura del chat del usuario. Cada respuesta del
+    Orquestador incluye texto narrado y, cuando procede, una
+    visualización dinámica generada a partir del \texttt{ChatResponse.chart}.}
+    \label{fig:screenshot-chat}
+\end{figure}
+
+El comportamiento es \textbf{dinámico}: el usuario puede
+pedir en lenguaje natural que se cambie el tipo de gráfico
+(``muéstrame eso en barras''), que se elimine (``sin gráfico'') o
+que se filtre por categoría, y el LLM recalcula la decisión sin
+modificar el código.
+
+\paragraph{Catálogo de tipos y reglas de elección.} El \textit{prompt}
+del \textit{router} restringe \texttt{chart\_type} a un catálogo
+cerrado de tres opciones e impone reglas heurísticas suaves para la
+elección por defecto: \texttt{line} para series temporales (gasto
+mensual, tendencias, evolución de objetivos), \texttt{bar} para
+comparaciones discretas (\textit{breakdown} por categoría, ranking
+de comercios o de meses) y \texttt{pie} solo cuando el número de
+categorías es bajo ($\leq 6$) y representan una distribución que
+suma al 100\,\%. El LLM puede ignorar estas reglas si el usuario
+expresa una preferencia explícita en el mensaje, lo que mantiene la
+naturaleza conversacional sin sacrificar la coherencia visual por
+defecto.
+
+\paragraph{Visualización del grafo agéntico.} Más allá de los
+gráficos de datos financieros, el sistema expone dos endpoints que
+serializan en JSON la topología viva del grafo LangGraph:
+\texttt{GET /me/agent-graph} devuelve los nodos del grafo personal
+del usuario (orchestrator, analyst, registrar, security,
+conversational) con los \textit{counts} de invocaciones del turno
+actual, y \texttt{GET /admin/agent-graph} añade el sub-agente
+Observability y un código de colores por estado de salud (\texttt{ok}
+en verde, \texttt{warning} en ámbar, \texttt{critical} en rojo). El
+frontend los renderiza con la librería de grafos de \texttt{vis.js},
+permitiendo arrastrar nodos y consultar \textit{tooltips} con la
+última latencia p95 de cada agente.
+
+La Figura~\ref{fig:screenshot-pending} muestra la vista de revisión
+de transacciones marcadas como anómalas por el Security, donde el
+usuario puede confirmar o rechazar manualmente. Esta pantalla
+constituye un tercer nivel de visualización dinámica: la lista se
+actualiza cuando un nuevo OCR o una alta manual entran al sistema
+y Security responde con \texttt{decision=challenge}, sin necesidad
+de refrescar la página.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=0.85\textwidth]{figures/screenshot_pending.png}
+    \caption{Pantalla de revisión de transacciones pendientes. Los
+    movimientos detectados como anómalos por el agente Security se
+    persisten con \texttt{status='pending'} y se muestran al usuario
+    para confirmación o rechazo manual.}
+    \label{fig:screenshot-pending}
+\end{figure}
+
+\subsection{Monitorización automática: MonitorAgent}
+\label{subsec:monitorizacion}
+
+\textbf{Cumple el requisito de monitorización del sistema.}
+El agente \texttt{MonitorAgent}
+(\texttt{src/agents/monitor/agent.py}) es un componente
+\textit{stateless} que, en cada invocación, consulta la tabla
+\texttt{events} y calcula un \texttt{MonitoringReport} con:
+
+\begin{itemize}[leftmargin=1.5em,itemsep=0.2em]
+  \item \textit{Counts} por estado (\texttt{ok}, \texttt{error},
+        \texttt{warning}, \texttt{denied}) y \textit{error rate}.
+  \item Clasificación de salud en \texttt{ok} / \texttt{warning} /
+        \texttt{critical} según un umbral configurable.
+  \item Percentiles p50 y p95 de latencia agrupados por
+        \texttt{(agent, action)}, calculados en Python con
+        \texttt{statistics} para garantizar portabilidad entre
+        Postgres.
+  \item Top 5 de errores por \texttt{(agent, action)}.
+  \item Sesiones y usuarios activos en la ventana.
+\end{itemize}
+
+La tabla \texttt{events} se puebla mediante el \textit{decorator}
+\texttt{Stopwatch} que envuelve cada operación de cada agente. Cada
+inserción es \textit{best-effort}: si la BD no está disponible, el
+\textit{Stopwatch} cae a un \textit{stub} en memoria y la operación
+no se interrumpe. El reporte se expone vía
+\texttt{GET /monitor/health-detailed} y vía la \textit{tool}
+\texttt{get\_system\_health} del chat de administrador.
+
+La Figura~\ref{fig:monitor-latency} muestra un ejemplo real de los
+percentiles p50 y p95 calculados por el \texttt{MonitorAgent} a partir
+de los eventos extraídos de \texttt{logs/app.log} (estado \texttt{ok}).
+El Orquestador y el Analyst concentran la mayor parte del coste por
+llamada al LLM, mientras que el sub-agente Conversational mantiene un
+p95 inferior a 1\,s al usar el modelo más ligero
+(\texttt{llama-3.1-8b-instant}).
+
+\paragraph{Umbrales de salud y ventanas configurables.} El clasificador
+de salud opera sobre la \textit{error rate} de la ventana móvil
+(por defecto 60 minutos): \texttt{ok} si la tasa es inferior al
+5\,\%, \texttt{warning} entre el 5\,\% y el 20\,\%, y \texttt{critical}
+por encima del 20\,\%. La ventana es ajustable entre 5 y 1440 minutos
+vía el parámetro \texttt{window\_minutes} de la \textit{tool}
+\texttt{get\_system\_health}, lo que permite al administrador
+distinguir entre incidentes puntuales (``últimos 5 minutos'') y
+degradaciones sostenidas (``últimas 24 horas''). El cálculo de
+percentiles se hace en Python con \texttt{statistics.quantiles}
+sobre los valores cargados desde la BD: aunque PostgreSQL ofrece
+\texttt{percentile\_cont}, SQLite no, y este enfoque uniforme
+garantiza que los \textit{tests} unitarios sobre SQLite produzcan los
+mismos resultados que el sistema en producción.
+
+\paragraph{Robustez ante fallos de la base de datos.} El
+\texttt{MonitorAgent} captura las excepciones de \texttt{SQLAlchemy}
+y devuelve un \texttt{MonitoringReport} con
+\texttt{db\_available=False} y una nota explicativa, en lugar de
+propagar el error al chat de administrador. Esto evita que un fallo
+transitorio de Supabase (común en el plan gratuito al primer acceso
+tras un período de inactividad) deje al administrador sin
+herramientas de diagnóstico precisamente cuando más las necesita.
+Adicionalmente, el chat de administrador puede combinar las
+\textit{tools} \texttt{get\_system\_health}, \texttt{query\_recent\_events}
+y \texttt{analyze\_log\_anomalies} en una misma respuesta para
+producir un resumen ejecutivo sin necesidad de salir del chat ni
+consultar el \textit{dashboard} de Supabase.
+
+\begin{figure}[t]
+    \centering
+    \input{figures/fig_monitor_latency.tex}
+    \caption{Latencias p50 y p95 por agente extraídas en vivo de la
+    tabla \texttt{events} del \texttt{MonitorAgent}. Datos:
+    \texttt{logs/app.log}, solo eventos con \texttt{status="ok"}.
+    Se omite \texttt{admin\_orchestrator} (n=7) por estar dominado
+    por un arranque en frío del LLM.}
+    \label{fig:monitor-latency}
+\end{figure}
+
+\subsection{Observabilidad: Langfuse}
+\label{subsec:langfuse}
+
+\textbf{Cumple el requisito de uso de Langfuse.}
+La integración con Langfuse Cloud está implementada en
+\texttt{src/utils/langfuse\_integration.py} con un \textit{wrapper}
+sobre el SDK oficial que permite:
+
+\begin{itemize}[leftmargin=1.5em,itemsep=0.2em]
+  \item \textbf{Trazado automático del grafo} mediante el
+        \texttt{LangfuseCallbackHandler} de LangChain, que registra
+        cada llamada al LLM, cada \textit{tool call} y cada nodo
+        ejecutado, con tiempos, tokens y \textit{metadata}.
+  \item \textbf{Propagación de contexto de usuario}
+        (\texttt{user\_id}, \texttt{session\_id}, \texttt{role}) vía
+        \texttt{propagate\_attributes} para filtrar trazas por
+        usuario en el dashboard.
+  \item \textbf{Consultas en tiempo real} desde el chat de
+        administrador: la \textit{tool} \texttt{get\_llm\_usage}
+        invoca la API REST de Langfuse y devuelve consumo de tokens
+        e importe estimado en \$.
+\end{itemize}
+
+El sistema es \textbf{tolerante a la ausencia de Langfuse}: si no
+se proveen \texttt{LANGFUSE\_PUBLIC\_KEY} y \texttt{LANGFUSE\_SECRET\_KEY}
+en \texttt{.env}, los \textit{wrappers} caen a \textit{no-op} y el
+backend arranca igualmente. Esta tolerancia permite ejecutar la
+suite de pruebas sin conectividad a Langfuse Cloud.
+
+\subsection{Prompt engineering con ASPECCT}
+\label{subsec:aspect}
+
+\textbf{Cumple el requisito de metodología estructurada (ASPECCT).}
+La aplicación de ASPECCT se concentra en cinco prompts del sistema,
+cada uno con sus siete secciones explícitamente marcadas:
+
+\begin{enumerate}[leftmargin=1.5em,itemsep=0.2em]
+  \item \texttt{ROUTER\_SYSTEM\_PROMPT} (router del orquestador): el
+        más extenso, enumera en \texttt{[E] Especificidad} las seis
+        acciones, las doce operaciones del Analyst y las reglas de
+        visualización dinámica.
+  \item \texttt{NARRATOR\_SYSTEM\_PROMPT} (narrador): convierte los
+        \textit{reports} en texto, con \texttt{[A] Audiencia} y
+        \texttt{[S] Style} adaptados al rol del usuario.
+  \item \texttt{CONVERSATIONAL\_SYSTEM\_PROMPT} (small-talk):
+        diferenciado del orquestador técnico, con la
+        \texttt{[C] Constraint} de no inventar cifras financieras.
+  \item \texttt{SUMMARY\_PROMPT} (resumen rodante): condensa la
+        conversación cada ocho turnos con tono telegráfico y
+        constraint de \textit{no inventar datos}.
+  \item \texttt{ROLE\_STYLE\_BLOCKS}: bloques \texttt{[A]+[S]+[T]}
+        para los modos \texttt{basic} y \texttt{advanced},
+        inyectados independientemente.
+\end{enumerate}
+
+La elección de ASPECCT frente a TAREA se justifica por la
+separación explícita de \texttt{[S] Style} y \texttt{[T] Tono}, que
+permite cambiar el tono por rol sin tocar el prompt principal, y por
+la idoneidad de \texttt{[E] Especificidad} para enumerar catálogos
+cerrados de operaciones, clave en un router con \textit{structured
+output}.
+
+\subsection{Evoluciones incrementales sobre P2, P3 y P5}
+\label{subsec:evoluciones}
+
+\textbf{Cumple los requisitos de evolución incremental y de
+evaluaciones cuantitativas.}
+El enunciado considera P4 cubierto por consenso. Las tres
+evoluciones documentadas, cada una equivalente a aproximadamente el
+20\,\% del esfuerzo original del módulo correspondiente, son las
+siguientes.
+
+\subsubsection*{E1 --- P2: clasificador semántico multilingüe}
+
+Se sustituye el extractor TF-IDF de char $n$-gramas por un pipeline
+híbrido \texttt{TransformerEmbedder} + \texttt{LinearSVM}, basado en
+\textit{Sentence-BERT}~\cite{sentence_bert} con el modelo
+\texttt{paraphrase-multilingual-MiniLM-L12-v2}. El sistema opera en
+dos modos: \textit{zero-shot} contra centroides de clase para usuarios
+con menos de 20 transacciones confirmadas, y \textit{personal} (SGD
+por usuario con LRU de 64 modelos) cuando se supera el umbral. La
+Tabla~\ref{tab:metrics-e1} resume los resultados pre/post.
+
+\begin{table}[!htbp]
+  \centering
+  \footnotesize
+  \begin{tabularx}{\linewidth}{@{}lYY@{}}
+    \toprule
+    \textbf{Métrica} & \textbf{Baseline (P2 original)} & \textbf{Post-E1} \\
+    \midrule
+    Cold-start accuracy global (n=69) & 52{,}17\,\% & \textbf{84{,}06\,\%} (+31{,}89 pts) \\
+    Accuracy en español (n=49) & 57{,}14\,\% & 83{,}67\,\% \\
+    Accuracy en inglés (n=20) & 40{,}00\,\% & \textbf{85{,}00\,\%} \\
+    Brecha ES vs EN & 17{,}14 pts & $-1{,}33$ pts \\
+    Latencia p95 \texttt{predict()} & 1{,}20\,ms & 30{,}08\,ms \\
+    \bottomrule
+  \end{tabularx}
+  \caption{Métricas pre/post de la evolución E1 (clasificador
+  semántico multilingüe para la \texttt{Area} de P2).}
+  \label{tab:metrics-e1}
+\end{table}
+
+La Figura~\ref{fig:e1-cold-start} compara la \textit{accuracy}
+\textit{cold-start} por clase del baseline (TF-IDF + SGD) frente al
+pipeline híbrido con embeddings de \textit{transformer}, evaluados
+sobre el \textit{set} versionado de 69 frases en español e inglés
+(\texttt{data/eval/p2\_cold\_start.jsonl}). La
+Figura~\ref{fig:e1-i18n} desagrega los mismos resultados por idioma:
+el modelo multilingüe MiniLM no solo sube la \textit{accuracy} global,
+sino que invierte la brecha ES--EN del baseline.
+
+\begin{figure}[t]
+    \centering
+    \input{figures/fig_e1_cold_start.tex}
+    \caption{Accuracy \textit{cold-start} por clase, baseline (P2
+    original) frente a post-E1 (transformer multilingüe + zero-shot).
+    Datos: \texttt{doc/results/p2\_baseline.json} y
+    \texttt{p2\_post.json}.}
+    \label{fig:e1-cold-start}
+\end{figure}
+
+\begin{figure}[t]
+    \centering
+    \input{figures/fig_e1_i18n.tex}
+    \caption{Brecha de idioma ES vs EN antes y después de E1. El
+    modelo multilingüe cierra completamente el sesgo del char-ngrams
+    monolingüe e iguala (incluso supera ligeramente) la accuracy en
+    inglés.}
+    \label{fig:e1-i18n}
+\end{figure}
+
+\subsubsection*{E2 --- P3: OCR de facturas EUR con campos enriquecidos}
+
+Se reentrena el \textit{scorer} sobre \texttt{PaddleOCR}~\cite{paddleocr}
+con un \textit{dataset} sintético de 500 facturas españolas (IVA
+21\,\%, símbolo €, decimal con coma, NIF formato \texttt{A12345678})
+generado con \texttt{faker} + Pillow. El contrato del OCR pasa de
+\texttt{\{total: float\}} a un \texttt{InvoiceMetadata} con
+\texttt{total}, \texttt{fecha}, \texttt{nif}, \texttt{comercio},
+\texttt{iva\_total} y \texttt{lineas}. La Figura~\ref{fig:ejemplo-factura}
+muestra un ejemplo del tipo de factura procesada por el sistema.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=0.5\textwidth]{figures/factura3.jpg}
+    \caption{Ejemplo de factura en euros utilizada para la evaluación
+    del motor OCR enriquecido (E2). El reto consiste en extraer
+    \texttt{total}, \texttt{fecha}, \texttt{NIF}, \texttt{comercio} e
+    \texttt{IVA} de imágenes con calidad variable.}
+    \label{fig:ejemplo-factura}
+\end{figure}
+
+La Tabla~\ref{tab:metrics-e2} recoge los resultados sobre el
+\textit{set} EUR de 30 facturas.
+
+\begin{table}[!htbp]
+  \centering
+  \footnotesize
+  \begin{tabularx}{\linewidth}{@{}lYY@{}}
+    \toprule
+    \textbf{Métrica} & \textbf{Baseline (P3 original)} & \textbf{Post-E2} \\
+    \midrule
+    Accuracy del total (EUR, n=30) & 6{,}67\,\% & \textbf{100{,}00\,\%} (+93{,}33 pts) \\
+    Cobertura campo \texttt{fecha} & 0\,\% & 100\,\% \\
+    Cobertura campo \texttt{NIF/CIF} & 0\,\% & 100\,\% \\
+    Cobertura campo \texttt{comercio} & 0\,\% & 100\,\% \\
+    Cobertura campo \texttt{IVA} & 0\,\% & 63\,\% \\
+    Latencia p95 \textit{scoring} & 5{,}61\,ms & 8{,}73\,ms ($<$20\,ms) \\
+    \bottomrule
+  \end{tabularx}
+  \caption{Métricas pre/post de la evolución E2 (OCR de facturas
+  en euros con campos enriquecidos y \texttt{InvoiceMetadata}).}
+  \label{tab:metrics-e2}
+\end{table}
+
+\newpage
+La Figura~\ref{fig:e2-eur} consolida la mejora de E2 sobre el
+\textit{set} sintético EUR de 30 facturas: el \textit{scorer}
+reentrenado eleva la \textit{accuracy} del \textit{total} del
+6{,}67\,\% al 100\,\% y, simultáneamente, la incorporación de
+\texttt{InvoiceMetadata} sube de cero la cobertura de los campos
+\texttt{fecha}, \texttt{NIF}, \texttt{comercio} e \texttt{IVA}.
+
+\begin{figure}[t]
+    \centering
+    \input{figures/fig_e2_eur.tex}
+    \caption{Resultados pre/post de E2 sobre el \textit{set} EUR de
+    30 facturas sintéticas. El IVA queda al 63\,\% por la
+    variabilidad de formatos (\texttt{IVA 21\%:} vs \texttt{I.V.A.:}),
+    el resto de campos llega al 100\,\%. Datos:
+    \texttt{doc/results/p3\_eur\_baseline.json} y
+    \texttt{p3\_eur\_post.json}.}
+    \label{fig:e2-eur}
+\end{figure}
+
+\subsubsection*{E3 --- P5: biometría con vídeo y anti-spoofing}
+
+Se sustituye la captura \textit{single-frame} por un vídeo WebM de
+3{,}5\,s a $\sim$30 fps. El \textit{backend} muestrea $N$ frames
+equiespaciados, computa \textit{embedding} (\texttt{FaceNet}~\cite{facenet})
+sobre rostros detectados con \texttt{MTCNN}~\cite{mtcnn}, calcula
+\textit{liveness} con \texttt{DenseNet201}~\cite{densenet} y promedia
+con normalización L2. Se han implementado tres fases acumulativas:
+(1) vídeo + voto promedio, (2) anti-spoofing end-to-end con LBP +
+análisis HSV/YCrCb + FFT, y (3) \textit{challenge-response} de
+parpadeo con \texttt{MediaPipe Face Mesh}~\cite{mediapipe} (468
+\textit{landmarks}) y \textit{Eye Aspect Ratio}. La
+Figura~\ref{fig:live-vs-spoof} ilustra el tipo de muestras utilizadas
+para validar el clasificador.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=0.9\textwidth]{figures/samples_live_vs_spoof.png}
+    \caption{Ejemplos de muestras reales (\textit{live}) frente a
+    ataques (\textit{spoof}) usados en la evaluación de
+    \textit{liveness}. El \textit{anti-spoofing} implementado en E3
+    extiende esta detección con LBP, análisis de espacio de color y
+    FFT, sin requerir un modelo nuevo.}
+    \label{fig:live-vs-spoof}
+\end{figure}
+
+La Tabla~\ref{tab:metrics-e3} resume el estado de las fases
+implementadas en la evolución y sus métricas verificadas.
+
+\begin{table}[!htbp]
+  \centering
+  \footnotesize
+  \begin{tabularx}{\linewidth}{@{}lYY@{}}
+    \toprule
+    \textbf{Fase} & \textbf{Aporte} & \textbf{Estado / métrica} \\
+    \midrule
+    F1 --- Vídeo + voto promedio &
+      Reduce FRR frente a parpadeos puntuales del \textit{single-frame} &
+      Implementada \\
+    F2 --- Anti-spoofing LBP+Color+FFT &
+      Discrimina piel real de pantallas y fotos impresas &
+      Implementada \\
+    F3 --- Challenge-response (parpadeo) &
+      Detecta vida activa mediante caída del EAR &
+      Implementada (MediaPipe FaceMesh) \\
+    F4--F6 --- Giros, Moiré, rPPG &
+      Refuerzos opcionales &
+      Diseñadas, pendientes de \textit{dataset} FAR/FRR \\
+    \midrule
+    \textbf{FAR pantallas LCD} & Antes de E3 & 36\,\% \\
+    \textbf{FAR pantallas LCD} & Tras F1+F2+F3 & Neutralizado \\
+    \bottomrule
+  \end{tabularx}
+  \caption{Estado de las fases y métricas verificadas de la
+  evolución E3 (biometría con vídeo y anti-spoofing escalonado de P5).}
+  \label{tab:metrics-e3}
+\end{table}
+
+Los \textit{scripts} de evaluación (\texttt{scripts/eval/*.py}) son
+reproducibles y depositan los resultados en \texttt{doc/results/*.json},
+permitiendo auditar las métricas pre/post de E1 y E2 de forma
+objetiva.
+
+\subsection{Pruebas unitarias y de estrés}
+\label{subsec:tests}
+
+\paragraph{Pruebas unitarias y de integración (\texttt{pytest}).}
+La suite consta de 21 \textit{tests} unitarios organizados por
+dominio (Tabla~\ref{tab:tests-unit}).
+
+\begin{table}[!htbp]
+  \centering
+  \footnotesize
+  \begin{tabularx}{\linewidth}{@{}lcY@{}}
+    \toprule
+    \textbf{Fichero} & \textbf{Tests} & \textbf{Cobertura} \\
+    \midrule
+    \texttt{test\_api\_endpoints.py} & 5 &
+      Healthcheck, registro y login JWT, chat con LLM mock \\
+    \texttt{test\_orchestrator\_routing.py} & 3 &
+      Routing del grafo (\texttt{respond\_final}, \texttt{delegate\_analyst}, \texttt{ask\_user}) \\
+    \texttt{test\_classifier\_hybrid.py} & 3 &
+      \textit{Zero-shot} y \textit{bootstrap} del \texttt{HybridClassifier} (E1) \\
+    \texttt{test\_agent\_graph.py} & 5 &
+      Constructor de grafos y \textit{parser} de logs \\
+    \texttt{test\_pending\_review\_flow.py} & 2 &
+      Detección y revisión de transacciones anómalas \\
+    \texttt{test\_registrar\_smoke.py} & 3 &
+      OCR (E2) + clasificador (E1) \\
+    \midrule
+    \textbf{Total} & \textbf{21} & Ejecución $<$15\,s con LLM y biometría mockeados \\
+    \bottomrule
+  \end{tabularx}
+  \caption{Distribución de los \textit{tests} unitarios y de
+  integración del proyecto.}
+  \label{tab:tests-unit}
+\end{table}
+
+El LLM se mockea sistemáticamente para mantener los \textit{tests}
+ofline; los \textit{embeddings} biométricos se sustituyen por un
+\textit{fake} configurado en \texttt{conftest.py}. La ejecución
+completa tarda menos de 15\,s.
+
+\paragraph{Pruebas de estrés (\texttt{Locust}).}
+\texttt{tests/stress/locustfile.py} define dos perfiles de usuario
+virtual: \texttt{ChatUser} (saludos y \textit{healthcheck}, peso
+3) y \texttt{AnalyticsUser} (resúmenes financieros, peso 1); que
+se registran automáticamente con un \textit{face} sintético y un
+correo único por sesión. La prueba estándar lanza 10 usuarios
+concurrentes durante 30\,s en modo \textit{headless}, midiendo
+latencia de \texttt{POST /chat}, \texttt{GET /chat/sessions} y
+\texttt{POST /auth/register}.
