@@ -31,11 +31,6 @@ import uuid
 from locust import HttpUser, between, task
 
 
-# PNG 16x16 gris generado con PIL — bytes literales para no añadir
-# dependencias al locustfile. Lo bastante real para que el decoder de
-# imágenes acepte el archivo y el flujo de registro llegue hasta el
-# pipeline biométrico (que sí va a fallar el match, pero los timings
-# de la API y la BD ya se han medido).
 _FAKE_FACE_PNG = bytes.fromhex(
     "89504e470d0a1a0a0000000d4948445200000010000000100802000000909168"
     "360000002349444154789c636c68686020053091a49a61540371808948757030"
@@ -70,8 +65,6 @@ class _BaseUser(HttpUser):
                 self.token = r.json().get("access_token")
                 r.success()
             else:
-                # El backend puede tardar en responder bajo carga; lo marcamos
-                # como fallo pero el resto de tasks no se ejecutarán.
                 r.failure(f"register devolvió {r.status_code}: {r.text[:120]}")
 
     @property
@@ -82,7 +75,7 @@ class _BaseUser(HttpUser):
 class ChatUser(_BaseUser):
     """Usuario que conversa con el chat con mensajes triviales."""
 
-    weight = 3  # 3 ChatUser por cada AnalyticsUser (el caso de uso más común)
+    weight = 3
 
     @task(2)
     def healthcheck(self):

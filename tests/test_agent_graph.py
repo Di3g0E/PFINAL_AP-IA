@@ -39,7 +39,6 @@ def test_user_graph_node_includes_role():
 
     ids = {n["id"] for n in g["nodes"]}
     assert ids == {"orchestrator[advanced]", "analyst[advanced]"}
-    # Arista orchestrator → analyst dentro de la misma sesión
     assert len(g["edges"]) == 1
 
 

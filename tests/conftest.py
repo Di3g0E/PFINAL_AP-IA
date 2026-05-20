@@ -26,7 +26,7 @@ def _disable_langfuse(monkeypatch):
     monkeypatch.setattr("src.utils.config.settings.langfuse_public_key", "")
 
 
-# --- Dispatch in-process de /modules/* (para no tener que levantar uvicorn) ---
+# Dispatch in-process de /modules/* (para no tener que levantar uvicorn)
 
 def _imports():
     from src.agents.analyst import agent as analyst
